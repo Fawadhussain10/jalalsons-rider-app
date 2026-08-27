@@ -1,0 +1,114 @@
+Analyzing js_rider...                                           
+
+warning - Unused import: 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' - lib\main.dart:3:8 - unused_import
+   info - The constant name 'MAPBOX_ACCESS_TOKEN' isn't a lowerCamelCase identifier - lib\mapbox_token.dart:1:14 - constant_identifier_names
+warning - Unused import: '../models/shift_model.dart' - lib\providers\auth_provider.dart:8:8 - unused_import
+   info - The private field _availableOrders could be 'final' - lib\providers\order_provider.dart:231:15 - prefer_final_fields
+   info - The private field _acceptedOrders could be 'final' - lib\providers\order_provider.dart:232:15 - prefer_final_fields
+   info - The private field _completedOrders could be 'final' - lib\providers\order_provider.dart:233:15 - prefer_final_fields
+warning - The declaration '_syncOrdersFromAPIToFirestore' isn't referenced - lib\providers\order_provider.dart:495:16 - unused_element
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\login_screen.dart:188:65 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\login_screen.dart:238:61 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\login_screen.dart:380:59 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\login_screen.dart:383:61 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\login_screen.dart:428:68 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\login_screen.dart:431:70 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\main_navigation.dart:65:70 - deprecated_member_use
+warning - Unused import: 'dart:ui' - lib\screens\map_screen.dart:5:8 - unused_import
+warning - Duplicate import - lib\screens\map_screen.dart:7:8 - duplicate_import
+   info - The private field _showBatteryNotice could be 'final' - lib\screens\map_screen.dart:44:8 - prefer_final_fields
+warning - The value of the field '_showBatteryNotice' isn't used - lib\screens\map_screen.dart:44:8 - unused_field
+warning - The value of the field '_styleUris' isn't used - lib\screens\map_screen.dart:46:22 - unused_field
+warning - The value of the field '_cameraUpdateDebounce' isn't used - lib\screens\map_screen.dart:53:18 - unused_field
+warning - The value of the field '_pulseAnimation' isn't used - lib\screens\map_screen.dart:60:26 - unused_field
+   info - 'value' is deprecated and shouldn't be used. Use component accessors like .r or .g, or toARGB32 for an explicit conversion - lib\screens\map_screen.dart:274:52 - deprecated_member_use
+warning - The declaration '_addOrUpdateRiderMarker' isn't referenced - lib\screens\map_screen.dart:287:16 - unused_element
+warning - The receiver can't be null, so the null-aware operator '?.' is unnecessary - lib\screens\map_screen.dart:293:50 - invalid_null_aware_operator
+   info - 'value' is deprecated and shouldn't be used. Use component accessors like .r or .g, or toARGB32 for an explicit conversion - lib\screens\map_screen.dart:320:53 - deprecated_member_use
+   info - Don't use 'BuildContext's across async gaps - lib\screens\map_screen.dart:416:26 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\screens\map_screen.dart:558:30 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\screens\map_screen.dart:831:27 - use_build_context_synchronously
+warning - The declaration '_toggleLocationSharing' isn't referenced - lib\screens\map_screen.dart:839:8 - unused_element
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\map_screen.dart:896:45 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\map_screen.dart:962:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\map_screen.dart:1071:33 - deprecated_member_use
+warning - Unused import: '../utils/app_colors.dart' - lib\screens\order_details_screen.dart:6:8 - unused_import
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\order_details_screen.dart:103:40 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\order_details_screen.dart:143:42 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\order_details_screen.dart:182:74 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\order_details_screen.dart:279:22 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\order_details_screen.dart:281:41 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\order_details_screen.dart:288:28 - deprecated_member_use
+   info - Don't use 'BuildContext's across async gaps - lib\screens\order_details_screen.dart:533:30 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\screens\order_details_screen.dart:537:28 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\screens\order_details_screen.dart:544:21 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\screens\order_details_screen.dart:546:28 - use_build_context_synchronously
+warning - Unused import: '../widgets/custom_text_field.dart' - lib\screens\orders_screen.dart:8:8 - unused_import
+warning - Unused import: '../utils/app_colors.dart' - lib\screens\orders_screen.dart:9:8 - unused_import
+warning - Unused import: '../widgets/custom_button.dart' - lib\screens\orders_screen.dart:14:8 - unused_import
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:71:73 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:282:39 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:346:54 - deprecated_member_use
+   info - Use a 'SizedBox' to add whitespace to a layout - lib\screens\orders_screen.dart:383:25 - sized_box_for_whitespace
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:409:48 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:449:39 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:1315:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:1361:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:1450:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:1514:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:1578:22 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\orders_screen.dart:1580:41 - deprecated_member_use
+   info - The local variable '_toDateTime' starts with an underscore - lib\screens\orders_screen.dart:1619:15 - no_leading_underscores_for_local_identifiers
+warning - The declaration '_getPaymentStatusColor' isn't referenced - lib\screens\orders_screen.dart:1683:9 - unused_element
+warning - Duplicate import - lib\screens\profile_screen.dart:10:8 - duplicate_import
+   info - Don't use 'BuildContext's across async gaps - lib\screens\profile_screen.dart:119:34 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\screens\profile_screen.dart:128:32 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\screens\profile_screen.dart:137:30 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:340:68 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:381:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:382:33 - deprecated_member_use
+warning - The declaration '_buildOnlineStatusToggle' isn't referenced - lib\screens\profile_screen.dart:492:10 - unused_element
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:509:60 - deprecated_member_use
+warning - Dead code - lib\screens\profile_screen.dart:548:68 - dead_code
+warning - The left operand can't be null, so the right operand is never executed - lib\screens\profile_screen.dart:548:71 - dead_null_aware_expression
+   info - 'activeColor' is deprecated and shouldn't be used. Use activeThumbColor instead. This feature was deprecated after v3.31.0-2.0.pre - lib\screens\profile_screen.dart:552:17 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:626:43 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:660:22 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:662:41 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:678:28 - deprecated_member_use
+   info - Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check - lib\screens\profile_screen.dart:713:38 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check - lib\screens\profile_screen.dart:733:38 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:786:71 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\profile_screen.dart:843:56 - deprecated_member_use
+   info - Parameter 'key' could be a super parameter - lib\screens\proof_of_delivery_screen.dart:11:9 - use_super_parameters
+warning - Unused import: 'package:flutter_svg/flutter_svg.dart' - lib\screens\shift_screen.dart:7:8 - unused_import
+warning - Unused import: '../utils/app_colors.dart' - lib\screens\shift_screen.dart:8:8 - unused_import
+   info - Parameter 'key' could be a super parameter - lib\screens\shift_screen.dart:11:9 - use_super_parameters
+   info - Unnecessary use of 'toList' in a spread - lib\screens\shift_screen.dart:116:91 - unnecessary_to_list_in_spreads
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\shift_screen.dart:130:42 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\shift_screen.dart:130:74 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\shift_screen.dart:133:44 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\shift_screen.dart:133:75 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\shift_screen.dart:183:33 - deprecated_member_use
+   info - Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check - lib\screens\shift_screen.dart:317:37 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check - lib\screens\shift_screen.dart:319:40 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\shift_screen.dart:430:47 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\shift_screen.dart:431:66 - deprecated_member_use
+warning - Unused import: 'package:firebase_core/firebase_core.dart' - lib\screens\splash_screen.dart:4:8 - unused_import
+warning - Unused import: '../services/firebase_service.dart' - lib\screens\splash_screen.dart:8:8 - unused_import
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\splash_screen.dart:192:56 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\screens\splash_screen.dart:197:56 - deprecated_member_use
+   info - Don't invoke 'print' in production code - lib\services\api_service.dart:676:11 - avoid_print
+   info - Use interpolation to compose strings and values - lib\services\api_service.dart:676:17 - prefer_interpolation_to_compose_strings
+   info - The type of the right operand ('ConnectivityResult') isn't a subtype or a supertype of the left operand ('List<ConnectivityResult>') - lib\services\offline_service.dart:34:28 - unrelated_type_equality_checks
+warning - The value of the local variable 'method' isn't used - lib\services\offline_service.dart:52:15 - unused_local_variable
+   info - 'background' is deprecated and shouldn't be used. Use surface instead. This feature was deprecated after v3.18.0-0.1.pre - lib\utils\app_theme.dart:31:9 - deprecated_member_use
+   info - 'onBackground' is deprecated and shouldn't be used. Use onSurface instead. This feature was deprecated after v3.18.0-0.1.pre - lib\utils\app_theme.dart:36:9 - deprecated_member_use
+   info - 'background' is deprecated and shouldn't be used. Use surface instead. This feature was deprecated after v3.18.0-0.1.pre - lib\utils\app_theme.dart:267:9 - deprecated_member_use
+   info - 'onBackground' is deprecated and shouldn't be used. Use onSurface instead. This feature was deprecated after v3.18.0-0.1.pre - lib\utils\app_theme.dart:272:9 - deprecated_member_use
+warning - Unused import: 'package:firebase_core/firebase_core.dart' - lib\utils\firebase_test.dart:2:8 - unused_import
+   info - 'value' is deprecated and shouldn't be used. Use initialValue instead. This will set the initial value for the form field. This feature was deprecated after v3.33.0-1.0.pre - lib\widgets\custom_text_field.dart:260:11 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\widgets\js_logo.dart:34:46 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\widgets\js_logo.dart:125:42 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\widgets\js_logo.dart:132:44 - deprecated_member_use
+

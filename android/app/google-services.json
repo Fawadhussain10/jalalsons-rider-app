@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "478079073295",
+    "firebase_url": "https://jalal-sons-rider-app-default-rtdb.firebaseio.com",
+    "project_id": "jalal-sons-rider-app",
+    "storage_bucket": "jalal-sons-rider-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:478079073295:android:33397e65a6b1804a01f77a",
+        "android_client_info": {
+          "package_name": "pk.com.jalalsons.js_rider"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyALkUvuuLEI7-vj1SYrQWliIhnXMyP3_P8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

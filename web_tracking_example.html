@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS Rider - Live Tracking</title>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-firestore-compat.js"></script>
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        #map {
+            width: 100vw;
+            height: 100vh;
+        }
+        .tracking-info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            z-index: 1000;
+            min-width: 300px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-online { background-color: #4CAF50; }
+        .status-offline { background-color: #F44336; }
+        .rider-info {
+            margin-top: 10px;
+        }
+        .last-updated {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div class="tracking-info">
+        <h3>🚚 JS Rider Live Tracking</h3>
+        <div id="rider-status">
+            <span class="status-indicator status-offline"></span>
+            <span>Connecting...</span>
+        </div>
+        <div class="rider-info" id="rider-info" style="display: none;">
+            <p><strong>Rider:</strong> <span id="rider-name">-</span></p>
+            <p><strong>Vehicle:</strong> <span id="vehicle-info">-</span></p>
+            <p><strong>Order:</strong> <span id="order-id">-</span></p>
+            <div class="last-updated">
+                Last updated: <span id="last-updated">-</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Firebase configuration (replace with your config)
+        const firebaseConfig = {
+          apiKey: "AIzaSyALkUvuuLEI7-vj1SYrQWliIhnXMyP3_P8",
+          authDomain: "jalal-sons-rider-app.firebaseapp.com",
+          databaseURL: "https://jalal-sons-rider-app-default-rtdb.firebaseio.com",
+          projectId: "jalal-sons-rider-app",
+          storageBucket: "jalal-sons-rider-app.firebasestorage.app",
+          messagingSenderId: "478079073295",
+          appId: "1:478079073295:android:33397e65a6b1804a01f77a"
+        };
+
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // Mapbox configuration
+        mapboxgl.accessToken = 'pk.YOUR_MAPBOX_PUBLIC_TOKEN'; // Replace with your Mapbox public token
+
+        // Initialize map
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/streets-v12',
+            center: [74.3587, 31.5204], // Default center (Lahore, Pakistan)
+            zoom: 13
+        });
+
+        let riderMarker = null;
+        let customerMarker = null;
+
+        // Function to update rider location
+        function updateRiderLocation(riderData) {
+            const liveLocation = riderData.preferences?.liveLocation;
+            if (!liveLocation) return;
+
+            const { lat, lng, updatedAt, orderId } = liveLocation;
+            
+            // Update status
+            document.getElementById('rider-status').innerHTML = 
+                '<span class="status-indicator status-online"></span><span>Rider Online</span>';
+            
+            // Update rider info
+            document.getElementById('rider-name').textContent = riderData.name || 'Unknown Rider';
+            document.getElementById('vehicle-info').textContent = 
+                `${riderData.vehicleType || 'Vehicle'} - ${riderData.vehicleNumber || 'N/A'}`;
+            document.getElementById('order-id').textContent = orderId || 'N/A';
+            document.getElementById('last-updated').textContent = 
+                new Date(updatedAt).toLocaleString();
+            
+            document.getElementById('rider-info').style.display = 'block';
+
+            // Update map
+            if (riderMarker) {
+                riderMarker.setLngLat([lng, lat]);
+            } else {
+                riderMarker = new mapboxgl.Marker({
+                    color: '#007AFF',
+                    scale: 1.2
+                })
+                .setLngLat([lng, lat])
+                .setPopup(new mapboxgl.Popup().setHTML(`
+                    <div style="padding: 10px;">
+                        <h4>🚚 ${riderData.name || 'Rider'}</h4>
+                        <p><strong>Vehicle:</strong> ${riderData.vehicleType || 'N/A'}</p>
+                        <p><strong>Order:</strong> ${orderId || 'N/A'}</p>
+                        <p><strong>Last Update:</strong> ${new Date(updatedAt).toLocaleString()}</p>
+                    </div>
+                `))
+                .addTo(map);
+            }
+
+            // Center map on rider
+            map.flyTo({
+                center: [lng, lat],
+                zoom: 15,
+                duration: 1000
+            });
+        }
+
+        // Function to add customer marker
+        function addCustomerMarker(customerLat, customerLng) {
+            if (customerMarker) {
+                customerMarker.remove();
+            }
+            
+            customerMarker = new mapboxgl.Marker({
+                color: '#FF4444',
+                scale: 1.2
+            })
+            .setLngLat([customerLng, customerLat])
+            .setPopup(new mapboxgl.Popup().setHTML(`
+                <div style="padding: 10px;">
+                    <h4>📍 Delivery Location</h4>
+                    <p>Your order will be delivered here</p>
+                </div>
+            `))
+            .addTo(map);
+        }
+
+        // Listen for rider location updates
+        function startTracking(riderId) {
+            db.collection('riders').doc(riderId).onSnapshot((doc) => {
+                if (doc.exists) {
+                    const riderData = doc.data();
+                    updateRiderLocation(riderData);
+                } else {
+                    document.getElementById('rider-status').innerHTML = 
+                        '<span class="status-indicator status-offline"></span><span>Rider Not Found</span>';
+                }
+            });
+        }
+
+        // Get rider ID from URL parameter or prompt user
+        const urlParams = new URLSearchParams(window.location.search);
+        const riderId = urlParams.get('riderId') || prompt('Enter Rider ID:');
+        
+        if (riderId) {
+            startTracking(riderId);
+        } else {
+            document.getElementById('rider-status').innerHTML = 
+                '<span class="status-indicator status-offline"></span><span>No Rider ID provided</span>';
+        }
+
+        // Add customer location if provided
+        const customerLat = parseFloat(urlParams.get('lat'));
+        const customerLng = parseFloat(urlParams.get('lng'));
+        
+        if (!isNaN(customerLat) && !isNaN(customerLng)) {
+            addCustomerMarker(customerLat, customerLng);
+        }
+    </script>
+</body>
+</html>

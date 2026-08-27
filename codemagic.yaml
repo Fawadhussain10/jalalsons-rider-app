@@ -1,0 +1,82 @@
+# Codemagic CI/CD — iOS App Store build for JS Rider
+# Docs: https://docs.codemagic.io/yaml-quick-start/building-a-flutter-app/
+#
+# ── ONE-TIME SETUP IN THE CODEMAGIC UI (Teams ▸ Integrations / Environment variables) ──
+#   1. App Store Connect integration:
+#        Teams ▸ <your team> ▸ Integrations ▸ App Store Connect ▸ add an API key
+#        (Issuer ID, Key ID, .p8). Give the integration a name and put that name
+#        in `app_store_connect: <name>` below (here: "AppStoreConnect_JSRider").
+#   2. Environment variable group "mapbox" with:
+#        MAPBOX_DOWNLOADS_TOKEN = <your Mapbox SECRET sk. token, scope DOWNLOADS:READ>
+#        (mark as secure)
+#   3. Environment variable group "mapbox_public" with:
+#        MAPBOX_TOKEN = <your Mapbox PUBLIC pk. token>   (used at runtime by the app)
+#   4. The bundle id com.jalalsons.jsrider must already be registered in your
+#      Apple Developer account WITH the Push Notifications capability, and an app
+#      record must exist in App Store Connect.
+
+workflows:
+  ios-appstore:
+    name: iOS — App Store / TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    integrations:
+      app_store_connect: AppStoreConnect_JSRider
+    environment:
+      groups:
+        - mapbox
+        - mapbox_public
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.jalalsons.jsrider
+      vars:
+        BUNDLE_ID: "com.jalalsons.jsrider"
+        APP_STORE_APPLE_ID: 6805820489   # App Store Connect app record: "JalalSons Rider"
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    cache:
+      cache_paths:
+        - $HOME/.pub-cache
+        - $HOME/Library/Caches/CocoaPods
+    scripts:
+      - name: Configure Mapbox SDK download token (.netrc)
+        script: |
+          cat > $HOME/.netrc <<EOF
+          machine api.mapbox.com
+            login mapbox
+            password $MAPBOX_DOWNLOADS_TOKEN
+          EOF
+          chmod 600 $HOME/.netrc
+      - name: Flutter pub get
+        script: flutter pub get
+      - name: Pod install
+        script: |
+          find . -name "Podfile" -execdir pod install \;
+      - name: Set build number from Codemagic counter
+        script: |
+          echo "Using build number $PROJECT_BUILD_NUMBER"
+      - name: Set up provisioning profiles
+        script: xcode-project use-profiles
+      - name: Flutter build ipa
+        script: |
+          flutter build ipa --release \
+            --build-name=1.0.0 \
+            --build-number=$PROJECT_BUILD_NUMBER \
+            --dart-define=MAPBOX_TOKEN=$MAPBOX_TOKEN \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # submit_to_app_store: false   # flip to true (and add release_type) once TestFlight looks good
+      email:
+        recipients:
+          - taha.sohail96@gmail.com
+        notify:
+          success: true
+          failure: true

@@ -1,0 +1,4 @@
+<resources>
+    <!-- Placeholder: real token injected at build time via --dart-define=MAPBOX_TOKEN= -->
+    <string name="mapbox_access_token">pk.PLACEHOLDER_SET_MAPBOX_TOKEN_AT_BUILD_TIME</string>
+</resources>
