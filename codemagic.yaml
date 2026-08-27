@@ -76,7 +76,7 @@ workflows:
         # submit_to_app_store: false   # flip to true (and add release_type) once TestFlight looks good
       email:
         recipients:
-          - taha.sohail96@gmail.com
+          - fawadh817@gmail.com
         notify:
           success: true
           failure: true
