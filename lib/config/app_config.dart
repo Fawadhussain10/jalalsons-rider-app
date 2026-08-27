@@ -53,7 +53,7 @@ class AppConfig {
   // the Directions API. Overridable at build time with --dart-define=MAPBOX_TOKEN=.
   static const String mapboxAccessToken = String.fromEnvironment(
     'MAPBOX_TOKEN',
-    defaultValue: 'pk.PLACEHOLDER_SET_MAPBOX_TOKEN_AT_BUILD_TIME',
+    defaultValue: 'pk.eyJ1IjoianNkZXZlbG9wZXJzIiwiYSI6ImNtdGI5ejllbTAyeG0yeXI2bXFoMWJnajcifQ.z-DiTLEU5nu-7PrZIuWaLA',
   );
   
   // Development/Demo Configuration
