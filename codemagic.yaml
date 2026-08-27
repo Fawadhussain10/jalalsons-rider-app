@@ -22,6 +22,7 @@ workflows:
       groups:
         - mapbox
         - mapbox_public
+        - appstore
       vars:
         BUNDLE_ID: "com.jalalsons.jsrider"
         APP_STORE_APPLE_ID: 6805820489
