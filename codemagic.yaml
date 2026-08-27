@@ -26,9 +26,6 @@ workflows:
       groups:
         - mapbox
         - mapbox_public
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.jalalsons.jsrider
       vars:
         BUNDLE_ID: "com.jalalsons.jsrider"
         APP_STORE_APPLE_ID: 6805820489   # App Store Connect app record: "JalalSons Rider"
@@ -56,8 +53,15 @@ workflows:
       - name: Set build number from Codemagic counter
         script: |
           echo "Using build number $PROJECT_BUILD_NUMBER"
-      - name: Set up provisioning profiles
-        script: xcode-project use-profiles
+      - name: Set up code signing (fetch + create if missing)
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --platform IOS \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
       - name: Flutter build ipa
         script: |
           flutter build ipa --release \
