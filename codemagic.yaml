@@ -1,19 +1,15 @@
 # Codemagic CI/CD — iOS App Store build for JS Rider
 # Docs: https://docs.codemagic.io/yaml-quick-start/building-a-flutter-app/
 #
-# ── ONE-TIME SETUP IN THE CODEMAGIC UI (Teams ▸ Integrations / Environment variables) ──
-#   1. App Store Connect integration:
-#        Teams ▸ <your team> ▸ Integrations ▸ App Store Connect ▸ add an API key
-#        (Issuer ID, Key ID, .p8). Give the integration a name and put that name
-#        in `app_store_connect: <name>` below (here: "AppStoreConnect_JSRider").
-#   2. Environment variable group "mapbox" with:
-#        MAPBOX_DOWNLOADS_TOKEN = <your Mapbox SECRET sk. token, scope DOWNLOADS:READ>
-#        (mark as secure)
-#   3. Environment variable group "mapbox_public" with:
-#        MAPBOX_TOKEN = <your Mapbox PUBLIC pk. token>   (used at runtime by the app)
-#   4. The bundle id com.jalalsons.jsrider must already be registered in your
-#      Apple Developer account WITH the Push Notifications capability, and an app
-#      record must exist in App Store Connect.
+# ── ONE-TIME SETUP IN THE CODEMAGIC UI ──
+#   1. Settings ▸ Integrations ▸ App Store Connect ▸ add API key, name it
+#      exactly "AppStoreConnect_JSRider" (referenced below).
+#      Issuer ID 2f5f3664-6f48-4533-a61e-ee6cbdbc1233, Key ID M2T3X2NLQJ.
+#   2. App ▸ Environment variables:
+#        group "mapbox":        MAPBOX_DOWNLOADS_TOKEN = <Mapbox sk. token, DOWNLOADS:READ>  (secure)
+#        group "mapbox_public": MAPBOX_TOKEN           = <Mapbox pk. public token>          (secure)
+#   3. Bundle id com.jalalsons.jsrider is registered (Push Notifications ON) and
+#      the App Store Connect app record exists (Apple ID 6805820489).
 
 workflows:
   ios-appstore:
@@ -28,7 +24,7 @@ workflows:
         - mapbox_public
       vars:
         BUNDLE_ID: "com.jalalsons.jsrider"
-        APP_STORE_APPLE_ID: 6805820489   # App Store Connect app record: "JalalSons Rider"
+        APP_STORE_APPLE_ID: 6805820489
       flutter: stable
       xcode: latest
       cocoapods: default
@@ -37,6 +33,9 @@ workflows:
         - $HOME/.pub-cache
         - $HOME/Library/Caches/CocoaPods
     scripts:
+      - name: Use CocoaPods only (skip Swift Package Manager migration)
+        script: flutter config --no-enable-swift-package-manager
+
       - name: Configure Mapbox SDK download token (.netrc)
         script: |
           cat > $HOME/.netrc <<EOF
@@ -45,15 +44,11 @@ workflows:
             password $MAPBOX_DOWNLOADS_TOKEN
           EOF
           chmod 600 $HOME/.netrc
+
       - name: Flutter pub get
         script: flutter pub get
-      - name: Pod install
-        script: |
-          find . -name "Podfile" -execdir pod install \;
-      - name: Set build number from Codemagic counter
-        script: |
-          echo "Using build number $PROJECT_BUILD_NUMBER"
-      - name: Set up code signing (fetch + create if missing)
+
+      - name: Fetch / create iOS signing files
         script: |
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
@@ -61,23 +56,32 @@ workflows:
             --platform IOS \
             --create
           keychain add-certificates
-          xcode-project use-profiles
-      - name: Flutter build ipa
+
+      - name: Pod install
         script: |
-          flutter build ipa --release \
+          find . -name "Podfile" -execdir pod install \;
+
+      - name: Flutter build (no code signing)
+        script: |
+          flutter build ios --release --no-codesign \
             --build-name=1.0.0 \
             --build-number=$PROJECT_BUILD_NUMBER \
-            --dart-define=MAPBOX_TOKEN=$MAPBOX_TOKEN \
-            --export-options-plist=/Users/builder/export_options.plist
+            --dart-define=MAPBOX_TOKEN=$MAPBOX_TOKEN
+
+      - name: Sign and build IPA
+        script: |
+          xcode-project use-profiles
+          xcode-project build-ipa \
+            --workspace ios/Runner.xcworkspace \
+            --scheme Runner
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
-      - flutter_drive.log
     publishing:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
-        # submit_to_app_store: false   # flip to true (and add release_type) once TestFlight looks good
+        # submit_to_app_store: false   # flip once TestFlight looks good
       email:
         recipients:
           - fawadh817@gmail.com
