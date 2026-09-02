@@ -110,9 +110,9 @@ class _LocationPermissionGateState extends State<_LocationPermissionGate> {
     });
   }
 
-  Future<bool> _showLocationDisclosureDialog() async {
-    if (!mounted) return false;
-    final result = await showDialog<bool>(
+  Future<void> _showLocationDisclosureDialog() async {
+    if (!mounted) return;
+    await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
@@ -125,7 +125,7 @@ class _LocationPermissionGateState extends State<_LocationPermissionGate> {
               Icon(Icons.location_on, color: Colors.blue, size: 28),
               SizedBox(width: 8),
               Text(
-                'Location Access Required',
+                'Location Access',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ],
@@ -150,13 +150,6 @@ class _LocationPermissionGateState extends State<_LocationPermissionGate> {
             ],
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text(
-                'Deny',
-                style: TextStyle(color: Colors.red, fontSize: 16),
-              ),
-            ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue,
@@ -165,9 +158,9 @@ class _LocationPermissionGateState extends State<_LocationPermissionGate> {
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              onPressed: () => Navigator.of(context).pop(true),
+              onPressed: () => Navigator.of(context).pop(),
               child: const Text(
-                'Accept',
+                'Continue',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
             ),
@@ -175,7 +168,6 @@ class _LocationPermissionGateState extends State<_LocationPermissionGate> {
         );
       },
     );
-    return result ?? false;
   }
 
   Future<void> _ensurePermissions() async {
@@ -190,14 +182,10 @@ class _LocationPermissionGateState extends State<_LocationPermissionGate> {
       }
       var permission = await geo.Geolocator.checkPermission();
       if (permission == geo.LocationPermission.denied) {
-        final accepted = await _showLocationDisclosureDialog();
-        if (!accepted) {
-          setState(() {
-            _checking = false;
-            _message = 'Location permission is required to continue.';
-          });
-          return;
-        }
+        await _showLocationDisclosureDialog();
+        // Always proceed to the real system permission prompt after the
+        // explanation screen — Apple guideline 5.1.1(iv): a custom pre-prompt
+        // must not itself grant or deny; only "Continue" to the OS dialog.
         permission = await geo.Geolocator.requestPermission();
       }
       if (permission == geo.LocationPermission.denied || permission == geo.LocationPermission.deniedForever) {

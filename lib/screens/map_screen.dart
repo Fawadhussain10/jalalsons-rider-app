@@ -502,9 +502,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     return moved >= _rerouteDistanceThresholdMeters * 3;
   }
 
-  Future<bool> _showLocationDisclosureDialog() async {
-    if (!mounted) return false;
-    final result = await showDialog<bool>(
+  Future<void> _showLocationDisclosureDialog() async {
+    if (!mounted) return;
+    await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
@@ -542,13 +542,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             ],
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text(
-                'Deny',
-                style: TextStyle(color: Colors.red, fontSize: 16),
-              ),
-            ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue,
@@ -557,9 +550,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              onPressed: () => Navigator.of(context).pop(true),
+              onPressed: () => Navigator.of(context).pop(),
               child: const Text(
-                'Accept',
+                'Continue',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
             ),
@@ -567,7 +560,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         );
       },
     );
-    return result ?? false;
   }
 
   Future<bool> _ensureLocationPermission() async {
@@ -578,11 +570,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
     var permission = await geo.Geolocator.checkPermission();
     if (permission == geo.LocationPermission.denied) {
-      final accepted = await _showLocationDisclosureDialog();
-      if (!accepted) {
-        setState(() => _permissionDenied = true);
-        return false;
-      }
+      await _showLocationDisclosureDialog();
       permission = await geo.Geolocator.requestPermission();
       if (permission == geo.LocationPermission.denied) {
         setState(() => _permissionDenied = true);
