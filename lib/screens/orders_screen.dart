@@ -275,21 +275,25 @@ class _PillTabs extends StatelessWidget {
           ),
           labelColor: Colors.white,
           unselectedLabelColor: AppColors.textSecondary,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 6),
           labelStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
           unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
           splashBorderRadius: BorderRadius.circular(12),
           tabs: [
             for (var i = 0; i < 3; i++)
               Tab(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(child: Text(labels[i], overflow: TextOverflow.fade, softWrap: false)),
-                    if (counts[i] > 0) ...[
-                      const SizedBox(width: 6),
-                      _CountBubble(count: counts[i], selected: controller.index == i),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(labels[i], softWrap: false),
+                      if (counts[i] > 0) ...[
+                        const SizedBox(width: 5),
+                        _CountBubble(count: counts[i], selected: controller.index == i),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
           ],
@@ -429,12 +433,27 @@ class OrderCard extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 14, 14, 0),
             child: Row(
               children: [
-                Text('#${order.reference}',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: -0.2)),
+                // Order number (+ "yesterday" tag) take the free space; the status
+                // chip keeps its natural width on the right.
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text('#${order.reference}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: -0.2)),
+                      ),
+                      if (isOldOrder) ...[
+                        const SizedBox(width: 8),
+                        const Flexible(
+                          child: StatusChip(label: 'YESTERDAY', color: AppColors.warning, icon: Icons.history_rounded),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
                 const SizedBox(width: 8),
-                if (isOldOrder)
-                  const StatusChip(label: 'YESTERDAY', color: AppColors.warning, icon: Icons.history_rounded),
-                const Spacer(),
                 StatusChip(label: style.label, color: style.color, icon: style.icon),
               ],
             ),
@@ -477,40 +496,58 @@ class OrderCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Container(
-            padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
             decoration: const BoxDecoration(
               color: Color(0xFFFAFAFC),
               border: Border(top: BorderSide(color: AppColors.borderLight)),
               borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Row(
                   children: [
-                    Text(formatRs(order.amount),
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: -0.3)),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        _PaymentChip(order: order),
-                        if (order.deliveryKms > 0) ...[
-                          const SizedBox(width: 6),
-                          StatusChip(
-                            label: '${order.deliveryKms.toStringAsFixed(1)} km',
-                            color: AppColors.textSecondary,
-                            icon: Icons.route_rounded,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(formatRs(order.amount),
+                                style: const TextStyle(
+                                    fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: -0.3)),
+                          ),
+                          const SizedBox(height: 6),
+                          // Chips go under the price and wrap onto a new line if needed.
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              _PaymentChip(order: order),
+                              if (order.deliveryKms > 0)
+                                StatusChip(
+                                  label: '${order.deliveryKms.toStringAsFixed(1)} km',
+                                  color: AppColors.textSecondary,
+                                  icon: Icons.route_rounded,
+                                ),
+                            ],
                           ),
                         ],
-                      ],
+                      ),
                     ),
+                    if (mode == 'completed')
+                      const Icon(Icons.chevron_right_rounded, color: AppColors.textLight),
                   ],
                 ),
-                const Spacer(),
-                if (isUpcoming) _AcceptButton(order: order),
-                if (mode == 'ongoing') _OngoingAction(order: order),
-                if (mode == 'completed')
-                  const Icon(Icons.chevron_right_rounded, color: AppColors.textLight),
+                if (isUpcoming) ...[
+                  const SizedBox(height: 12),
+                  _AcceptButton(order: order),
+                ],
+                if (mode == 'ongoing') ...[
+                  const SizedBox(height: 12),
+                  _OngoingAction(order: order),
+                ],
               ],
             ),
           ),
@@ -541,11 +578,14 @@ class _AcceptButton extends StatelessWidget {
     final busy = context.select<OrderProvider, bool>((p) => p.isBusy(order.id));
     return FilledButton.icon(
       onPressed: busy ? null : () => confirmAccept(context, order),
-      style: FilledButton.styleFrom(minimumSize: const Size(0, 44), padding: const EdgeInsets.symmetric(horizontal: 18)),
+      style: FilledButton.styleFrom(
+        minimumSize: const Size.fromHeight(48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
       icon: busy
           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
           : const Icon(Icons.check_rounded, size: 18),
-      label: Text(busy ? 'Accepting' : 'Accept'),
+      label: Text(busy ? 'Accepting…' : 'Accept Order'),
     );
   }
 }
@@ -557,21 +597,42 @@ class _OngoingAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!order.isDispatched) {
-      return const StatusChip(
-        label: 'WAITING FOR DISPATCH',
-        color: AppColors.textSecondary,
-        icon: Icons.schedule_rounded,
+      return Container(
+        height: 48,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.canvas,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.schedule_rounded, size: 18, color: AppColors.textSecondary),
+            SizedBox(width: 8),
+            Text('Waiting for dispatch',
+                style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
+          ],
+        ),
       );
     }
-    return FilledButton.icon(
-      onPressed: () => startRide(context, order),
-      style: FilledButton.styleFrom(
-        minimumSize: const Size(0, 44),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        backgroundColor: AppColors.ink,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(color: AppColors.ink.withValues(alpha: 0.25), blurRadius: 14, offset: const Offset(0, 6)),
+        ],
       ),
-      icon: const Icon(Icons.navigation_rounded, size: 18),
-      label: const Text('Start Ride'),
+      child: FilledButton.icon(
+        onPressed: () => startRide(context, order),
+        style: FilledButton.styleFrom(
+          minimumSize: const Size.fromHeight(48),
+          backgroundColor: AppColors.ink,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+        icon: const Icon(Icons.navigation_rounded, size: 19),
+        label: const Text('Start Ride'),
+      ),
     );
   }
 }
