@@ -1,4 +1,4 @@
 <resources>
-    <!-- Placeholder: real token injected at build time via --dart-define=MAPBOX_TOKEN= -->
+    <!-- Public Mapbox token; the Dart side can override it with the MAPBOX_TOKEN dart-define. -->
     <string name="mapbox_access_token">pk.eyJ1IjoianNkZXZlbG9wZXJzIiwiYSI6ImNtdGI5ejllbTAyeG0yeXI2bXFoMWJnajcifQ.z-DiTLEU5nu-7PrZIuWaLA</string>
 </resources>

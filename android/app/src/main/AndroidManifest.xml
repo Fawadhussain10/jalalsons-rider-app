@@ -31,7 +31,7 @@
         android:theme="@style/AppTheme">
 
         <!-- Mapbox public token. The runtime token is set from Dart
-             (MapboxOptions.setAccessToken, via --dart-define=MAPBOX_TOKEN=).
+             (MapboxOptions.setAccessToken, overridable with the MAPBOX_TOKEN dart-define).
              Replace @string/mapbox_access_token for a standalone Android build. -->
         <meta-data
             android:name="MAPBOX_ACCESS_TOKEN"
