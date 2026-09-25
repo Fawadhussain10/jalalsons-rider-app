@@ -437,6 +437,21 @@ class FirebaseService {
     }
   }
 
+  /// Live rider position for the Odoo live map and the customer tracking page.
+  /// Touches only `preferences.liveLocation` (+ lastActiveAt), so it never resets
+  /// the rider's name, rating or order counters like a full rider save would.
+  static Future<void> updateRiderLiveLocation(String riderId, Map<String, dynamic> liveLocation) async {
+    try {
+      if (_firestore == null) return;
+      await _firestore!.collection('riders').doc(riderId).set({
+        'preferences': {'liveLocation': liveLocation},
+        'lastActiveAt': TimeUtils.nowForServer(),
+      }, SetOptions(merge: true)).timeout(const Duration(seconds: 8));
+    } catch (e) {
+      if (kDebugMode) print('Error updating live location: $e');
+    }
+  }
+
   // Upsert full order document to Firestore
   static Future<void> upsertOrder(Map<String, dynamic> orderJson) async {
     try {

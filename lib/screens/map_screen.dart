@@ -4,11 +4,10 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:math' as math;
-import 'dart:math' as math;
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:provider/provider.dart';
@@ -18,6 +17,28 @@ import '../providers/order_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/firebase_service.dart';
 import 'proof_of_delivery_screen.dart';
+import '../utils/app_colors.dart';
+import '../widgets/ui_kit.dart';
+import '../utils/time_utils.dart';
+
+/// One turn of the route, from the Mapbox Directions `steps`.
+class _NavStep {
+  final String instruction;
+  final String type;
+  final String modifier;
+  final double lat;
+  final double lng;
+  const _NavStep(this.instruction, this.type, this.modifier, this.lat, this.lng);
+}
+
+/// Map styles the rider can cycle through: navigation day/night are tuned for
+/// driving (clear roads, calm colours), then satellite.
+const List<(String, String)> _kMapStyles = [
+  ('mapbox://styles/mapbox/navigation-day-v1', 'Navigation'),
+  ('mapbox://styles/mapbox/navigation-night-v1', 'Night'),
+  (MapboxStyles.MAPBOX_STREETS, 'Streets'),
+  (MapboxStyles.SATELLITE_STREETS, 'Satellite'),
+];
 
 class MapScreen extends StatefulWidget {
   final dynamic order;
@@ -73,9 +94,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   double? _navDistanceMeters;
   double? _navDurationSeconds;
   String? _nextStepInstruction;
+  List<_NavStep> _steps = const [];
+  int _stepIndex = 1;
+  double? _distanceToManeuver;
+  Map<String, dynamic>? _lastRouteFeatureCollection;
 
   final String _routeSourceId = 'route_source_jsr';
   final String _routeLineLayerId = 'route_line_jsr';
+  final String _routeCasingLayerId = 'route_casing_jsr';
   // Removed alternate routes support
   bool _hasCustomerIcon = false;
   bool _hasRiderIcon = false;
@@ -423,6 +449,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           setState(() {
             _distanceMeters = d;
             _currentPosition = pos;
+            _advanceStep(pos);
           });
         }
 
@@ -446,31 +473,20 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           final headingOk = headingDelta >= 10.0; // or heading changed significantly
 
           if (timeOk || distanceOk || headingOk) {
-            final auth = context.read<AuthProvider>();
-            final rider = auth.currentRider;
+            final rider = context.read<AuthProvider>().currentRider;
             if (rider != null) {
-              try {
-                await FirebaseService.saveRiderData(
-                  riderId: rider.id,
-                  name: rider.name,
-                  email: rider.email,
-                  phone: rider.phone,
-                  vehicleNumber: rider.vehicleNumber,
-                  vehicleType: rider.vehicleType,
-                  preferences: {
-                    'liveLocation': {
-                      'lat': pos.latitude,
-                      'lng': pos.longitude,
-                      'updatedAt': now.toIso8601String(),
-                      'orderId': widget.order.id,
-                      'bearing': pos.heading,
-                      'speed': pos.speed,
-                    },
-                  },
-                );
-                _lastLocationShareAt = now;
-                _lastSharedPosition = pos;
-              } catch (_) {}
+              // Mark as sent before the write so a slow network can't queue duplicates.
+              _lastLocationShareAt = now;
+              _lastSharedPosition = pos;
+              unawaited(FirebaseService.updateRiderLiveLocation(rider.id, {
+                'lat': pos.latitude,
+                'lng': pos.longitude,
+                'updatedAt': now.toIso8601String(),
+                'orderId': widget.order.id,
+                'bearing': pos.heading,
+                'speed': pos.speed,
+                'accuracy': pos.accuracy.round(),
+              }));
             }
           }
         }
@@ -487,6 +503,17 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     );
   }
 
+
+  /// Moves the turn banner on once the rider reaches the upcoming maneuver.
+  void _advanceStep(geo.Position pos) {
+    if (_steps.isEmpty) return;
+    double distTo(int i) => geo.Geolocator.distanceBetween(pos.latitude, pos.longitude, _steps[i].lat, _steps[i].lng);
+    while (_stepIndex < _steps.length - 1 && distTo(_stepIndex) < 18) {
+      _stepIndex++;
+    }
+    _distanceToManeuver = distTo(_stepIndex);
+    _nextStepInstruction = _steps[_stepIndex].instruction;
+  }
 
   bool _shouldReroute(geo.Position pos) {
     if (_lastRouteFetchAt == null || _lastRouteFetchPosition == null) return true;
@@ -634,15 +661,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       unawaited(_fetchAndShowRouteForPosition(pos));
     }
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Navigation started!'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
   }
 
   Future<void> _fetchAndShowRouteForPosition(geo.Position startPos, {bool isPrefetch = false}) async {
@@ -689,15 +707,25 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
       try {
         final legs = selectedRoute['legs'] as List?;
-        if (legs != null && legs.isNotEmpty) {
-          final steps = legs.first['steps'] as List?;
-          if (steps != null && steps.isNotEmpty) {
-            _nextStepInstruction = (steps.first['maneuver']?['instruction'] as String?) ?? 'Proceed';
-          }
-        }
+        final rawSteps = (legs != null && legs.isNotEmpty) ? (legs.first['steps'] as List? ?? []) : [];
+        _steps = [
+          for (final st in rawSteps)
+            if (st is Map && st['maneuver'] is Map && (st['maneuver']['location'] as List?)?.length == 2)
+              _NavStep(
+                (st['maneuver']['instruction'] ?? '').toString(),
+                (st['maneuver']['type'] ?? '').toString(),
+                (st['maneuver']['modifier'] ?? '').toString(),
+                ((st['maneuver']['location'] as List)[1] as num).toDouble(),
+                ((st['maneuver']['location'] as List)[0] as num).toDouble(),
+              ),
+        ];
+        // steps[0] is "depart" at the rider's position; the next turn is steps[1].
+        _stepIndex = _steps.length > 1 ? 1 : 0;
+        _nextStepInstruction = _steps.isNotEmpty ? _steps[_stepIndex].instruction : 'Proceed';
+        _advanceStep(startPos);
       } catch (_) {}
 
-      final featureCollection = {
+      final featureCollection = <String, dynamic>{
         "type": "FeatureCollection",
         "features": [
           {
@@ -711,6 +739,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         ],
       };
 
+      _lastRouteFeatureCollection = featureCollection;
       if (await _mapController.style.styleSourceExists(_routeSourceId)) {
         await _mapController.style.setStyleSourceProperty(
           _routeSourceId,
@@ -768,22 +797,36 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         await _mapController.style.addStyleSource(_routeSourceId, json.encode(source));
       }
 
+      if (!await _mapController.style.styleLayerExists(_routeCasingLayerId)) {
+        await _mapController.style.addStyleLayer(json.encode({
+          "id": _routeCasingLayerId,
+          "type": "line",
+          "source": _routeSourceId,
+          "layout": {"line-join": "round", "line-cap": "round"},
+          "paint": {
+            "line-color": "#FFFFFF",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 12, 7.0, 18, 16.0],
+            "line-opacity": 0.95
+          }
+        }), null);
+      }
       if (!await _mapController.style.styleLayerExists(_routeLineLayerId)) {
-        var layer = {
+        await _mapController.style.addStyleLayer(json.encode({
           "id": _routeLineLayerId,
           "type": "line",
           "source": _routeSourceId,
-          "layout": {
-            "line-join": "round",
-            "line-cap": "round"
-          },
+          "layout": {"line-join": "round", "line-cap": "round"},
           "paint": {
-            "line-color": "#007AFF",
-            "line-width": 6.0,
-            "line-opacity": 0.9
+            "line-color": "#E51A1A",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 12, 4.0, 18, 10.0],
+            "line-opacity": 1.0
           }
-        };
-        await _mapController.style.addStyleLayer(json.encode(layer), null);
+        }), null);
+      }
+      // A style switch drops sources; put the current route back.
+      if (_lastRouteFeatureCollection != null) {
+        await _mapController.style.setStyleSourceProperty(
+            _routeSourceId, 'data', jsonEncode(_lastRouteFeatureCollection));
       }
 
       // Route arrows layer removed to avoid missing 'arrow_icon' image errors
@@ -1043,382 +1086,545 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
 
+  // ───────────────────────────────────────────────────────────────────────
+  // UI
+  // ───────────────────────────────────────────────────────────────────────
+
+  Order? get _typedOrder => widget.order is Order ? widget.order as Order : null;
+
+  IconData _maneuverIcon(_NavStep? step) {
+    if (step == null) return Icons.navigation_rounded;
+    final m = step.modifier;
+    if (step.type == 'arrive') return Icons.flag_rounded;
+    if (step.type == 'roundabout' || step.type == 'rotary') return Icons.roundabout_right_rounded;
+    if (m == 'uturn') return Icons.u_turn_left_rounded;
+    if (m == 'sharp left') return Icons.turn_sharp_left_rounded;
+    if (m == 'sharp right') return Icons.turn_sharp_right_rounded;
+    if (m == 'slight left') return Icons.turn_slight_left_rounded;
+    if (m == 'slight right') return Icons.turn_slight_right_rounded;
+    if (m == 'left') return Icons.turn_left_rounded;
+    if (m == 'right') return Icons.turn_right_rounded;
+    return Icons.straight_rounded;
+  }
+
+  String get _etaClock {
+    if (_navDurationSeconds == null) return '';
+    return TimeUtils.timeOfDay(DateTime.now().add(Duration(seconds: _navDurationSeconds!.round())));
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey[100],
-      body: Stack(
-        children: [
-          MapWidget(
-            key: ValueKey("mapWidget"),
-            styleUri: MapboxStyles.MAPBOX_STREETS,
-            cameraOptions: CameraOptions(
-              center: _hasValidDeliveryLocation 
-                  ? _customerPosition 
-                  : (_currentPosition != null 
-                      ? Point(coordinates: Position(_currentPosition!.longitude, _currentPosition!.latitude))
-                      : Point(coordinates: Position(55.2708, 25.2048))), // Dubai fallback
-              zoom: _hasValidDeliveryLocation ? 15.0 : 12.0,
-              bearing: 0.0,
-              pitch: 0.0,
+    final pad = MediaQuery.of(context).padding;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark.copyWith(statusBarColor: Colors.transparent),
+      child: Scaffold(
+        backgroundColor: AppColors.canvas,
+        body: Stack(
+          // Fill the screen even before the map view has laid out.
+          fit: StackFit.expand,
+          children: [
+            MapWidget(
+              key: const ValueKey("mapWidget"),
+              styleUri: _kMapStyles.first.$1,
+              cameraOptions: CameraOptions(
+                center: _hasValidDeliveryLocation
+                    ? _customerPosition
+                    : (_currentPosition != null
+                        ? Point(coordinates: Position(_currentPosition!.longitude, _currentPosition!.latitude))
+                        : Point(coordinates: Position(74.3587, 31.5204))), // Lahore fallback
+                zoom: _hasValidDeliveryLocation ? 15.0 : 12.0,
+                bearing: 0.0,
+                pitch: 0.0,
+              ),
+              onMapCreated: _onMapCreated,
             ),
-            onMapCreated: _onMapCreated,
-          ),
 
-
-          // Permission denied banner
-          if (_permissionDenied)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 80,
-              left: 16,
-              right: 16,
-              child: FadeTransition(
-                opacity: _fadeAnimation,
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.red[50],
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.red[200]!),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.location_off, color: Colors.red[600]),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Text(
-                            'Location permission is required for navigation.',
-                            style: TextStyle(fontWeight: FontWeight.w500)
-                        ),
-                      ),
-                    ],
+            // Soft fade at the top so the status bar stays readable over any map.
+            IgnorePointer(
+              child: Container(
+                height: pad.top + 90,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.white.withValues(alpha: 0.85), Colors.white.withValues(alpha: 0.0)],
                   ),
                 ),
               ),
             ),
 
-          // Customer info card
-          if (_isMapReady)
+            // Top: back button + turn-by-turn banner (or destination chip before starting)
             Positioned(
-              top: MediaQuery.of(context).padding.top + 32,
-              left: 16,
-              right: 16,
+              top: pad.top + 10,
+              left: 14,
+              right: 14,
               child: FadeTransition(
                 opacity: _fadeAnimation,
-                child: _buildCustomerInfoCard(),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _GlassButton(
+                      icon: Icons.arrow_back_rounded,
+                      tooltip: 'Back',
+                      onTap: () => Navigator.of(context).maybePop(),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(child: _isNavigating ? _buildTurnBanner() : _buildDestinationChip()),
+                  ],
+                ),
               ),
             ),
 
-          // Floating circular buttons panel - bottom left
-          Positioned(
-            left: 16,
-            top: MediaQuery.of(context).padding.top + 186,
-            child: SlideTransition(
-              position: _slideAnimation,
-              child: _buildFloatingCircularButtons(),
-            ),
-          ),
+            if (_permissionDenied)
+              Positioned(
+                top: pad.top + 84,
+                left: 14,
+                right: 14,
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.primarySoft,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.location_off_rounded, color: AppColors.primary),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text('Location permission is required for navigation.',
+                            style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.primaryDark)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
 
-          // Navigation controls (main action buttons)
-          Positioned(
-            bottom: MediaQuery.of(context).padding.bottom + 16,
-            left: 16,
-            right: 16,
-            child: SlideTransition(
-              position: _slideAnimation,
-              child: _buildNavigationControls(),
+            // Right: map controls
+            Positioned(
+              right: 14,
+              top: pad.top + (_isNavigating ? 120 : 76),
+              child: SlideTransition(position: _slideAnimation, child: _buildMapControls()),
+            ),
+
+            // Bottom: trip panel
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SlideTransition(position: _slideAnimation, child: _buildTripPanel(pad.bottom)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDestinationChip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: AppColors.cardShadow,
+      ),
+      child: Row(
+        children: [
+          const IconBadge(icon: Icons.flag_rounded, color: AppColors.primary, size: 34),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Delivering to #${_typedOrder?.reference ?? widget.order.id}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                Text(
+                  (widget.order.deliveryAddress as String?)?.isNotEmpty == true
+                      ? widget.order.deliveryAddress as String
+                      : (widget.order.customerName ?? 'Customer').toString(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
+                ),
+              ],
             ),
           ),
         ],
       ),
     );
   }
-  Widget _buildCustomerInfoCard() {
+
+  Widget _buildTurnBanner() {
+    final step = _steps.isNotEmpty ? _steps[_stepIndex] : null;
+    final arriving = step?.type == 'arrive' || (_distanceMeters != null && _distanceMeters! < 60);
+    final instruction = arriving
+        ? 'You have arrived'
+        : (_nextStepInstruction?.isNotEmpty == true ? _nextStepInstruction! : 'Follow the route');
+    final dist = _distanceToManeuver;
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
+        gradient: arriving ? AppColors.primaryGradient : AppColors.inkGradient,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 20, offset: Offset(0, 8))],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(arriving ? Icons.flag_rounded : _maneuverIcon(step), color: Colors.white, size: 32),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!arriving && dist != null)
+                  Text(dist < 1000 ? 'In ${(dist / 10).round() * 10} m' : 'In ${(dist / 1000).toStringAsFixed(1)} km',
+                      style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: -0.4)),
+                Text(
+                  instruction,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: arriving || dist == null ? 1 : 0.8),
+                    fontSize: arriving || dist == null ? 17 : 14,
+                    fontWeight: FontWeight.w700,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildMapControls() {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: AppColors.cardShadow,
+      ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // Navigation info (only when navigating)
-          if (_isNavigating && (_navDistanceMeters != null || _navDurationSeconds != null)) ...[
-            Row(
-              children: [
-                Icon(Icons.route, size: 16, color: Colors.blue[700]),
-                const SizedBox(width: 6),
-                if (_navDistanceMeters != null)
-                  Text(_formatDistance(_navDistanceMeters!),
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500)),
-                if (_navDurationSeconds != null) ...[
-                  const SizedBox(width: 6),
-                  Text(_formatDuration(_navDurationSeconds!),
-                      style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-                ],
-                if (_nextStepInstruction != null) ...[
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _nextStepInstruction!,
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+          _ControlButton(
+            icon: _followRider ? Icons.my_location_rounded : Icons.location_searching_rounded,
+            color: _followRider ? AppColors.info : AppColors.textSecondary,
+            active: _followRider,
+            tooltip: _followRider ? 'Following you' : 'Follow me',
+            onTap: () => setState(() => _followRider = !_followRider),
+          ),
+          _ControlButton(
+            icon: Icons.explore_rounded,
+            tooltip: 'North up',
+            onTap: () async {
+              try {
+                final pos = _currentPosition ?? await geo.Geolocator.getCurrentPosition();
+                await _mapController.flyTo(
+                  CameraOptions(
+                    center: Point(coordinates: Position(pos.longitude, pos.latitude)),
+                    bearing: 0.0,
+                    pitch: 0.0,
                   ),
-                ],
-              ],
+                  MapAnimationOptions(duration: 600),
+                );
+              } catch (_) {}
+            },
+          ),
+          _ControlButton(
+            icon: Icons.layers_rounded,
+            tooltip: 'Map style: ${_kMapStyles[_selectedStyleIndex].$2}',
+            onTap: () async {
+              setState(() => _selectedStyleIndex = (_selectedStyleIndex + 1) % _kMapStyles.length);
+              try {
+                await _mapController.loadStyleURI(_kMapStyles[_selectedStyleIndex].$1);
+                await _ensureRouteSourceAndLayersExist();
+              } catch (_) {}
+              if (mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('Map: ${_kMapStyles[_selectedStyleIndex].$2}'),
+                  duration: const Duration(milliseconds: 900),
+                ));
+              }
+            },
+          ),
+          _ControlButton(
+            imagePath: 'assets/icons/Google_map_icon.png',
+            tooltip: 'Open in Google Maps',
+            onTap: _onOpenInGoogleMaps,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTripPanel(double bottomInset) {
+    final order = _typedOrder;
+    final name = (widget.order.customerName ?? 'Customer').toString();
+    final initials = name.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).take(2).map((w) => w[0]).join().toUpperCase();
+    final cod = order?.isCashOnDelivery ?? true;
+    final amount = order?.amount ?? 0.0;
+    final away = _distanceMeters;
+    // Proximity meter: full when inside the 400 m delivery zone.
+    final progress = away == null ? 0.0 : (1 - ((away - 400) / 3000)).clamp(0.0, 1.0);
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(18, 10, 18, bottomInset + 16),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        boxShadow: [BoxShadow(color: Color(0x26000000), blurRadius: 30, offset: Offset(0, -6))],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4)),
             ),
-            const SizedBox(height: 6),
-          ],
+          ),
 
-          // Main customer info
+          // Trip summary
           Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              // Status icon
-              Icon(
-                _canDeliver ? Icons.location_on : Icons.navigation,
-                color: _canDeliver ? Colors.green[600] : Colors.orange[600],
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-
-              // Customer details
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      widget.order.customerName ?? 'Customer',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      _navDurationSeconds != null ? _formatDuration(_navDurationSeconds!) : (away != null ? _formatDistance(away) : '—'),
+                      style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -1, height: 1.05),
                     ),
+                    const SizedBox(height: 2),
                     Text(
-                      'Order #${widget.order.id}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.grey[600],
-                      ),
+                      _navDurationSeconds != null
+                          ? '${_navDistanceMeters != null ? _formatDistance(_navDistanceMeters!) : ''} · arrive by $_etaClock'
+                          : (away != null ? 'from the customer' : 'Locating you…'),
+                      style: const TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600),
                     ),
-                    if (widget.order.deliveryAddress != null)
-                      Text(
-                        widget.order.deliveryAddress!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[700],
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
                   ],
                 ),
               ),
-
-              // Distance badge
-              if (_distanceMeters != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _canDeliver ? Colors.green[50] : Colors.orange[50],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _formatDistance(_distanceMeters!),
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: _canDeliver ? Colors.green[700] : Colors.orange[700],
+              _canDeliver
+                  ? const StatusChip(label: 'IN DELIVERY ZONE', color: AppColors.success, icon: Icons.verified_rounded)
+                  : StatusChip(
+                      label: away == null ? 'LOCATING' : '${_formatDistance(away)} AWAY',
+                      color: AppColors.warning,
+                      icon: Icons.near_me_rounded,
                     ),
-                  ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 6,
+              backgroundColor: AppColors.canvas,
+              valueColor: AlwaysStoppedAnimation(_canDeliver ? AppColors.success : AppColors.primary),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Customer
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(gradient: AppColors.primaryGradient, borderRadius: BorderRadius.circular(16)),
+                child: Text(initials.isEmpty ? '?' : initials,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                    Text(
+                      '#${order?.reference ?? widget.order.id}${(widget.order.deliveryAddress as String?)?.isNotEmpty == true ? ' · ${widget.order.deliveryAddress}' : ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+                    ),
+                  ],
                 ),
+              ),
+              _RoundAction(icon: Icons.call_rounded, color: AppColors.success, tooltip: 'Call customer', onTap: _onCallCustomer),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Payment strip
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+              color: cod ? AppColors.warningSoft : AppColors.successSoft,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                Icon(cod ? Icons.payments_rounded : Icons.verified_rounded,
+                    color: cod ? const Color(0xFFB45309) : AppColors.success),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(cod ? 'Collect cash from customer' : 'Already paid · nothing to collect',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: cod ? const Color(0xFF92400E) : const Color(0xFF0B7A3B))),
+                ),
+                if (cod)
+                  Text(formatRs(amount),
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF92400E))),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Actions
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _onNavigate,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const ui.Size.fromHeight(54),
+                    backgroundColor: AppColors.ink,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  icon: Icon(_isNavigating ? Icons.my_location_rounded : Icons.navigation_rounded),
+                  label: Text(_isNavigating ? 'Re-center' : 'Navigate'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _onDelivered, // explains the 400 m rule when still too far
+                  style: FilledButton.styleFrom(
+                    minimumSize: const ui.Size.fromHeight(54),
+                    backgroundColor: _canDeliver ? AppColors.primary : const Color(0xFFE9EAEE),
+                    foregroundColor: _canDeliver ? Colors.white : AppColors.textSecondary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  icon: Icon(_canDeliver ? Icons.photo_camera_rounded : Icons.lock_clock_rounded),
+                  label: const Text('Delivered'),
+                ),
+              ),
             ],
           ),
         ],
       ),
     );
   }
+}
 
-  // _buildRouteAlternatives removed
+class _GlassButton extends StatelessWidget {
+  const _GlassButton({required this.icon, required this.onTap, required this.tooltip});
+  final IconData icon;
+  final VoidCallback onTap;
+  final String tooltip;
 
-  Widget _buildFloatingCircularButtons() {
-    return Container(
-      decoration: BoxDecoration(
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(25),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+        shape: const CircleBorder(),
+        elevation: 0,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Container(
+            width: 50,
+            height: 50,
+            decoration: const BoxDecoration(shape: BoxShape.circle, boxShadow: AppColors.cardShadow),
+            child: Icon(icon, color: AppColors.textPrimary),
           ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Follow toggle button
-          _buildCircularButton(
-            onTap: () => setState(() => _followRider = !_followRider),
-            icon: _followRider ? Icons.gps_fixed : Icons.gps_off,
-            color: _followRider ? Colors.blue : Colors.grey,
-            tooltip: _followRider ? 'Following' : 'Free',
-          ),
-          const SizedBox(height: 8),
-          // Compass button
-          _buildCircularButton(
-            onTap: () async {
-              try {
-                final pos = await geo.Geolocator.getCurrentPosition();
-                _followRider = true;
-                await _mapController.setCamera(CameraOptions(
-                  center: Point(coordinates: Position(pos.longitude, pos.latitude)),
-                  bearing: 0.0,
-                ));
-                setState(() {});
-              } catch (_) {}
-            },
-            icon: Icons.explore,
-            color: Colors.grey[700]!,
-            tooltip: 'Reset North',
-          ),
-          const SizedBox(height: 8),
-          // Style switcher button
-          _buildCircularButton(
-            onTap: () async {
-              setState(() => _selectedStyleIndex = (_selectedStyleIndex + 1) % 4);
-              try {
-                await _mapController.loadStyleURI((_selectedStyleIndex == 0) ? MapboxStyles.MAPBOX_STREETS : (_selectedStyleIndex == 1) ? MapboxStyles.LIGHT : (_selectedStyleIndex == 2) ? MapboxStyles.DARK : MapboxStyles.SATELLITE_STREETS);
-                await _ensureRouteSourceAndLayersExist();
-              } catch (_) {}
-            },
-            icon: Icons.layers,
-            color: Colors.grey[700]!,
-            tooltip: 'Change Map Style',
-          ),
-          const SizedBox(height: 8),
-          // Google Maps redirect button
-          _buildCircularButton(
-            onTap: _onOpenInGoogleMaps,
-            imagePath: 'assets/icons/Google_map_icon.png',
-            color: Colors.red[600]!,
-            tooltip: 'Open in Google Maps',
-          ),
-        ],
+        ),
       ),
     );
   }
+}
 
-  Widget _buildCircularButton({
-    required VoidCallback onTap,
-    IconData? icon,
-    String? imagePath,
-    required Color color,
-    required String tooltip,
-  }) {
-    return Material(
-      shape: const CircleBorder(),
+class _ControlButton extends StatelessWidget {
+  const _ControlButton({
+    required this.tooltip,
+    required this.onTap,
+    this.icon,
+    this.imagePath,
+    this.color = AppColors.textPrimary,
+    this.active = false,
+  });
+  final IconData? icon;
+  final String? imagePath;
+  final Color color;
+  final bool active;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
       child: InkWell(
+        borderRadius: BorderRadius.circular(14),
         onTap: onTap,
-        borderRadius: BorderRadius.circular(25),
         child: Container(
-          width: 50,
-          height: 50,
+          width: 46,
+          height: 46,
+          margin: const EdgeInsets.symmetric(vertical: 2),
           decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white,
+            color: active ? AppColors.infoSoft : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
           ),
-          child: imagePath != null 
-            ? Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Image.asset(imagePath, fit: BoxFit.contain),
-              )
-            : Icon(icon, color: color, size: 22),
+          padding: EdgeInsets.all(imagePath != null ? 11 : 0),
+          child: imagePath != null ? Image.asset(imagePath!, fit: BoxFit.contain) : Icon(icon, color: color, size: 23),
         ),
       ),
     );
   }
+}
 
-  Widget _buildNavigationControls() {
-    return Material(
-      elevation: 10,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: _buildFloatingPillButton(
-                onPressed: _onNavigate,
-                icon: _isNavigating ? Icons.my_location : Icons.navigation,
-                label: _isNavigating ? "Re-center" : "Navigate",
-                color: _isNavigating ? Colors.orange : Colors.blue,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildFloatingPillButton(
-                onPressed: _onCallCustomer,
-                icon: Icons.phone,
-                label: "Call",
-                color: Colors.green,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildFloatingPillButton(
-                onPressed: _canDeliver ? _onDelivered : null,
-                icon: Icons.camera_alt,
-                label: "Delivered",
-                color: _canDeliver ? Colors.red : Colors.grey,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+class _RoundAction extends StatelessWidget {
+  const _RoundAction({required this.icon, required this.color, required this.onTap, required this.tooltip});
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final String tooltip;
 
-  Widget _buildFloatingPillButton({required VoidCallback? onPressed, required IconData icon, required String label, required Color color}) {
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 26),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-          ],
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: color,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(width: 50, height: 50, child: Icon(icon, color: Colors.white)),
         ),
       ),
     );
