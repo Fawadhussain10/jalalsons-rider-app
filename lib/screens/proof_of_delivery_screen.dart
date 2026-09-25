@@ -40,7 +40,8 @@ class _ProofOfDeliveryScreenState extends State<ProofOfDeliveryScreen> {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(
       source: ImageSource.camera,
-      imageQuality: 30, // Aggressive compression to target < 1MB
+      imageQuality: 45,
+      maxWidth: 1280, // plenty for proof photos; keeps uploads fast on mobile data
     );
 
     if (pickedFile != null) {

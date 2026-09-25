@@ -2,12 +2,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import '../config/app_config.dart';
+import '../utils/time_utils.dart';
 
 class FirebaseService {
   static FirebaseFirestore? _firestore;
-  static FirebaseMessaging? _fcm;
   static String? _deviceId;
 
   static Future<void> initialize() async {
@@ -19,9 +18,6 @@ class FirebaseService {
         persistenceEnabled: true,
         cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
       );
-
-      // Initialize FCM
-      await _setupFCM();
 
       // Get device ID for session isolation
       await _getDeviceId();
@@ -37,87 +33,16 @@ class FirebaseService {
     }
   }
 
-  // Setup FCM
-  static Future<void> _setupFCM() async {
-    try {
-      _fcm = FirebaseMessaging.instance;
-
-      // Request permissions (especially for iOS)
-      NotificationSettings settings = await _fcm!.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-
-      if (kDebugMode) {
-        print('User granted notification permission: ${settings.authorizationStatus}');
-      }
-
-      // Handle foreground messages
-      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        if (kDebugMode) {
-          print('Got a message whilst in the foreground!');
-          print('Message data: ${message.data}');
-        }
-
-        if (message.notification != null) {
-          if (kDebugMode) {
-            print('Message also contained a notification: ${message.notification}');
-          }
-          // You could show a local notification here if needed
-        }
-      });
-
-      // Handle notification clicks when app is in background but not terminated
-      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-        if (kDebugMode) {
-          print('A new onMessageOpenedApp event was published!');
-        }
-        // Navigate to specific screen based on message data if needed
-      });
-
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error setting up FCM: $e');
-      }
-    }
-  }
-
-  // Get FCM Token
-  static Future<String?> getFCMToken() async {
-    try {
-      if (_fcm == null) return null;
-      String? token = await _fcm!.getToken();
-      if (kDebugMode) {
-        print('FCM Token: $token');
-      }
-      return token;
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error getting FCM token: $e');
-      }
-      return null;
-    }
-  }
-
-  // Update FCM Token for a rider
-  static Future<void> updateRiderFCMToken(String riderId) async {
+  /// Stores (or removes, when [token] is null) the rider's push token.
+  static Future<void> setRiderFcmToken(String riderId, String? token) async {
     try {
       if (_firestore == null) return;
-      String? token = await getFCMToken();
-      if (token != null) {
-        await _firestore!.collection('riders').doc(riderId).update({
-          'fcmToken': token,
-          'lastTokenUpdate': DateTime.now().toIso8601String(),
-        });
-        if (kDebugMode) {
-          print('FCM token updated for rider: $riderId');
-        }
-      }
+      await _firestore!.collection('riders').doc(riderId).set({
+        'fcmToken': token ?? FieldValue.delete(),
+        'lastTokenUpdate': TimeUtils.nowForServer(),
+      }, SetOptions(merge: true)).timeout(const Duration(seconds: 10));
     } catch (e) {
-      if (kDebugMode) {
-        print('Error updating FCM token: $e');
-      }
+      if (kDebugMode) print('Error saving FCM token: $e');
     }
   }
 
@@ -156,7 +81,6 @@ class FirebaseService {
     required String userEmail,
     required String userName,
     required DateTime expiresAt,
-    String? password, // Only if remember me is enabled
   }) async {
     try {
       if (_firestore == null) {
@@ -180,13 +104,13 @@ class FirebaseService {
             : Platform.isIOS
             ? 'ios'
             : 'unknown',
-        if (password != null) 'password': password, // Only store if remember me
       };
 
       // FIRST: Logout user from ALL other devices (single-device login)
       await _logoutFromAllOtherDevices(userEmail);
 
-      // Use email as document ID (single session per user)
+      // Use email as document ID (single session per user). set() replaces the
+      // whole document, which also wipes any plaintext password older builds stored.
       final documentId = userEmail
           .replaceAll('@', '_at_')
           .replaceAll('.', '_dot_');
@@ -339,57 +263,6 @@ class FirebaseService {
         print(
           'Error getting active session for device (continuing anyway): $e',
         );
-      }
-      return null;
-    }
-  }
-
-  // Get saved credentials for auto-login (single-device login)
-  static Future<Map<String, dynamic>?> getSavedCredentials() async {
-    try {
-      if (_firestore == null || _deviceId == null) return null;
-
-      // Try to get all active sessions and filter locally (faster approach)
-      final query = await _firestore!
-          .collection('user_sessions')
-          .where('isActive', isEqualTo: true)
-          .get()
-          .timeout(
-            const Duration(seconds: 10), // Increased timeout for emulator
-          );
-
-      // Filter for current device locally
-      for (final doc in query.docs) {
-        final sessionData = doc.data();
-        if (sessionData['deviceId'] == _deviceId &&
-            sessionData['password'] != null) {
-          if (kDebugMode) {
-            print(
-              'Found saved credentials for device $_deviceId: ${sessionData['userEmail']}',
-            );
-          }
-          return {
-            'email': sessionData['userEmail'],
-            'password': sessionData['password'],
-            'sessionId': sessionData['sessionId'],
-          };
-        }
-      }
-
-      if (kDebugMode) {
-        print('No saved credentials found for device: $_deviceId');
-        print('Total sessions found: ${query.docs.length}');
-        for (final doc in query.docs) {
-          final data = doc.data();
-          print(
-            'Session deviceId: ${data['deviceId']}, email: ${data['userEmail']}, hasPassword: ${data['password'] != null}',
-          );
-        }
-      }
-      return null;
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error getting saved credentials (continuing anyway): $e');
       }
       return null;
     }
@@ -606,104 +479,23 @@ class FirebaseService {
     }
   }
 
-  // Stream orders from Firestore
-  static Stream<List<Map<String, dynamic>>> streamOrders() {
-    if (_firestore == null) {
-      return const Stream.empty();
-    }
+  /// Orders placed at or after [fromLocal] (usually yesterday's midnight), newest
+  /// first. `createdAt` is a single-field index, so no composite index is needed;
+  /// rider/branch/state filtering happens on the device.
+  static Stream<List<Map<String, dynamic>>> streamOrdersPlacedSince(DateTime fromLocal) {
+    if (_firestore == null) return const Stream.empty();
     return _firestore!
         .collection('orders')
+        .where('createdAt', isGreaterThanOrEqualTo: TimeUtils.toServerQueryString(fromLocal))
         .orderBy('createdAt', descending: true)
         .snapshots()
         .map((snap) => snap.docs.map((d) => d.data()).toList());
   }
-  //
-  // // Stream only draft orders (for upcoming tab)
-  // static Stream<List<Map<String, dynamic>>> streamDraftOrders() {
-  //   if (_firestore == null) {
-  //     return const Stream.empty();
-  //   }
-  //   return _firestore!
-  //       .collection('orders')
-  //       .where('stateTrail.draft.at', isNull: false)
-  //       .snapshots()
-  //       .map((snap) => snap.docs.map((d) => d.data()).toList());
-  // }
-  //
-  // // Stream orders accepted by specific user (for ongoing tab)
-  // static Stream<List<Map<String, dynamic>>> streamAcceptedOrdersByUser(String userId) {
-  //   if (_firestore == null) {
-  //     return const Stream.empty();
-  //   }
-  //   return _firestore!
-  //       .collection('orders')
-  //       .where('stateTrail.accepted.by', isEqualTo: int.parse(userId))
-  //       .snapshots()
-  //       .map((snap) => snap.docs.map((d) => d.data()).toList());
-  // }
-  //
-  // // Stream orders delivered by specific user (for completed tab)
-  // static Stream<List<Map<String, dynamic>>> streamDeliveredOrdersByUser(String userId) {
-  //   if (_firestore == null) {
-  //     return const Stream.empty();
-  //   }
-  //   return _firestore!
-  //       .collection('orders')
-  //       .where('stateTrail.delivered.by', isEqualTo: int.parse(userId))
-  //       .snapshots()
-  //       .map((snap) => snap.docs.map((d) => d.data()).toList());
-  // }
 
-  // Stream only draft orders (for upcoming tab) - sorted by createdAt
-  static Stream<List<Map<String, dynamic>>> streamDraftOrders() {
-    if (_firestore == null) {
-      return const Stream.empty();
-    }
-    return _firestore!
-        .collection('orders')
-        .where('stateTrail.draft.at', isNull: false)
-        .orderBy(
-          'createdAt',
-          descending: true,
-        ) // Sort by createdAt for available orders
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => d.data()).toList());
-  }
-
-  // Stream orders accepted by specific user (for ongoing tab) - sorted by accepted.at
-  static Stream<List<Map<String, dynamic>>> streamAcceptedOrdersByUser(
-    String userId,
-  ) {
-    if (_firestore == null) {
-      return const Stream.empty();
-    }
-    return _firestore!
-        .collection('orders')
-        .where('stateTrail.accepted.by', isEqualTo: int.parse(userId))
-        .orderBy(
-          'stateTrail.accepted.at',
-          descending: true,
-        ) // Sort by accepted timestamp
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => d.data()).toList());
-  }
-
-  // Stream orders delivered by specific user (for completed tab) - sorted by delivered.at
-  static Stream<List<Map<String, dynamic>>> streamDeliveredOrdersByUser(
-    String userId,
-  ) {
-    if (_firestore == null) {
-      return const Stream.empty();
-    }
-    return _firestore!
-        .collection('orders')
-        .where('stateTrail.delivered.by', isEqualTo: int.parse(userId))
-        .orderBy(
-          'stateTrail.delivered.at',
-          descending: true,
-        ) // Sort by delivered timestamp
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => d.data()).toList());
+  /// Live updates of one order document.
+  static Stream<Map<String, dynamic>?> streamOrder(String orderId) {
+    if (_firestore == null) return const Stream.empty();
+    return _firestore!.collection('orders').doc(orderId).snapshots().map((d) => d.data());
   }
 
   // Get order document by id (single read)
@@ -755,7 +547,7 @@ class FirebaseService {
     try {
       if (_firestore == null) return;
 
-      final now = DateTime.now().toIso8601String();
+      final now = TimeUtils.nowForServer();
       final userIdInt = int.parse(userId);
 
       await _firestore!
@@ -852,21 +644,21 @@ class FirebaseService {
       final riderDataStore = riderDoc.data() ?? {};
       final double currentRating = (riderDataStore['rating'] ?? 0.0).toDouble();
 
-      // Get completed orders count for this rider
-      final completedOrdersQuery = await _firestore!
-          .collection('orders')
-          .where('stateTrail.delivered.by', isEqualTo: riderIdInt)
-          .get();
-
-      final completedOrders = completedOrdersQuery.docs.length;
-
-      // Get total orders count (accepted + completed)
-      final totalOrdersQuery = await _firestore!
-          .collection('orders')
-          .where('stateTrail.accepted.by', isEqualTo: riderIdInt)
-          .get();
-
-      final totalOrders = totalOrdersQuery.docs.length;
+      final ordersRef = _firestore!.collection('orders');
+      // Counts are server-side aggregates (no documents downloaded); timing
+      // analytics use the latest 100 deliveries only.
+      final results = await Future.wait([
+        ordersRef.where('stateTrail.delivered.by', isEqualTo: riderIdInt).count().get(),
+        ordersRef.where('stateTrail.accepted.by', isEqualTo: riderIdInt).count().get(),
+        ordersRef
+            .where('stateTrail.delivered.by', isEqualTo: riderIdInt)
+            .orderBy('stateTrail.delivered.at', descending: true)
+            .limit(100)
+            .get(),
+      ]);
+      final completedOrders = (results[0] as AggregateQuerySnapshot).count ?? 0;
+      final totalOrders = (results[1] as AggregateQuerySnapshot).count ?? 0;
+      final completedOrdersQuery = results[2] as QuerySnapshot<Map<String, dynamic>>;
 
       // Calculate total earnings, on-time delivery, and average delivery time
       double totalEarnings = 0;
@@ -900,18 +692,18 @@ class FirebaseService {
         final estimatedAtStr = orderData['estimatedDeliveryTime'] as String?;
 
         if (deliveredAtStr != null) {
-          final deliveredAt = DateTime.tryParse(deliveredAtStr);
+          final deliveredAt = TimeUtils.parseServerTime(deliveredAtStr);
           if (deliveredAt != null) {
             // 1. On-Time Delivery Logic
             DateTime? estimatedAt;
             if (estimatedAtStr != null) {
-              estimatedAt = DateTime.tryParse(estimatedAtStr);
+              estimatedAt = TimeUtils.parseServerTime(estimatedAtStr);
             } else {
               // DYNAMIC SLA: Calculate based on distance, starting from DISPATCH
               final baseTimeStr =
                   dispatchedAtStr ?? acceptedAtStr ?? createdAtStr;
               if (baseTimeStr != null) {
-                final baseTime = DateTime.tryParse(baseTimeStr);
+                final baseTime = TimeUtils.parseServerTime(baseTimeStr);
                 if (baseTime != null) {
                   // Get distance from order data (set by Mapbox during navigation)
                   final double kms = (orderData['delivery_kms'] as num? ?? 5.0)
@@ -941,7 +733,7 @@ class FirebaseService {
             final startMarkerStr =
                 dispatchedAtStr ?? acceptedAtStr ?? createdAtStr;
             if (startMarkerStr != null) {
-              final startTime = DateTime.tryParse(startMarkerStr);
+              final startTime = TimeUtils.parseServerTime(startMarkerStr);
               if (startTime != null) {
                 final diff = deliveredAt.difference(startTime).inMinutes;
                 if (diff >= 0 && diff < AppConfig.maxRealisticDeliveryMinutes) {
@@ -1058,49 +850,6 @@ class FirebaseService {
       if (kDebugMode) {
         print('Error updating rider profile: $e');
       }
-    }
-  }
-
-  // Update password in user session
-  static Future<bool> updateUserPassword(
-    String userEmail,
-    String newPassword,
-  ) async {
-    try {
-      if (_firestore == null) return false;
-
-      // Find the user session document
-      final querySnapshot = await _firestore!
-          .collection('user_sessions')
-          .where('userEmail', isEqualTo: userEmail)
-          .where('isActive', isEqualTo: true)
-          .limit(1)
-          .get();
-
-      if (querySnapshot.docs.isNotEmpty) {
-        final docId = querySnapshot.docs.first.id;
-
-        // Update the password in the session
-        await _firestore!.collection('user_sessions').doc(docId).update({
-          'password': newPassword,
-          'updatedAt': DateTime.now().toIso8601String(),
-        });
-
-        if (kDebugMode) {
-          print('Password updated in Firestore for user: $userEmail');
-        }
-        return true;
-      }
-
-      if (kDebugMode) {
-        print('No active session found for user: $userEmail');
-      }
-      return false;
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error updating password in Firestore: $e');
-      }
-      return false;
     }
   }
 

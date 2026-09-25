@@ -74,7 +74,7 @@ class _SplashScreenState extends State<SplashScreen>
   void _startInitializationAfterSplash() async {
     // Wait for splash screen animations to complete (logo + fade animations)
     // This ensures splash screen is fully visible before starting initialization
-    await Future.delayed(const Duration(milliseconds: 1200));
+    await Future.delayed(const Duration(milliseconds: 350));
     
     // Now start the actual app initialization
     _initializeApp();
@@ -91,11 +91,9 @@ class _SplashScreenState extends State<SplashScreen>
       // Quick auth check with timeout to handle different device performance
       await Future.any([
         authProvider.initializeAuth(),
-        Future.delayed(const Duration(seconds: 10), () => null),
+        Future.delayed(const Duration(seconds: 12), () => null),
       ]);
       
-      // Additional delay to show "Initializing..." message
-      await Future.delayed(const Duration(milliseconds: 800));
       
       // Navigate to appropriate screen
       if (mounted) {

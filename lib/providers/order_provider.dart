@@ -1,7 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
 import '../services/firebase_service.dart';
-import '../models/odoo_order.dart';
+import '../utils/time_utils.dart';
 
 enum OrderStatus {
   pending,
@@ -21,6 +23,7 @@ enum OrderPriority {
 class Order {
   final String id;
   final String reference;
+  final String tossdownSequence;
   final String customerName;
   final String customerPhone;
   final String pickupAddress;
@@ -42,13 +45,23 @@ class Order {
   final DateTime? deliveredAt;
   final List<String> items;
   final Map<String, dynamic>? stateTrail;
-  final String paymentMethod; 
+  final String paymentMethod;
+  final String paymentMode;
   final bool isPaid;
   final bool isCancelledOrRefunded;
+  final bool liveOnApp;
+  final String orderType;
+  final String channel;
+  final int? branchId;
+  final String branchName;
+  final double deliveryKms;
+  final int? acceptedBy;
+  final int? deliveredBy;
 
   Order({
     required this.id,
     required this.reference,
+    this.tossdownSequence = '',
     required this.customerName,
     required this.customerPhone,
     required this.pickupAddress,
@@ -58,7 +71,7 @@ class Order {
     required this.deliveryLatitude,
     required this.deliveryLongitude,
     required this.amount,
-    this.currency = 'AED',
+    this.currency = 'PKR',
     this.status = OrderStatus.pending,
     this.priority = OrderPriority.medium,
     required this.createdAt,
@@ -71,78 +84,154 @@ class Order {
     this.items = const [],
     this.stateTrail,
     this.paymentMethod = 'cash',
+    this.paymentMode = 'cod',
     this.isPaid = false,
     this.isCancelledOrRefunded = false,
+    this.liveOnApp = false,
+    this.orderType = 'delivery',
+    this.channel = '',
+    this.branchId,
+    this.branchName = '',
+    this.deliveryKms = 0.0,
+    this.acceptedBy,
+    this.deliveredBy,
   });
 
+  static double _toDouble(dynamic v) {
+    if (v is num) return v.toDouble();
+    return double.tryParse(v?.toString() ?? '') ?? 0.0;
+  }
 
+  static int? _toInt(dynamic v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v?.toString() ?? '');
+  }
+
+  static DateTime? _trailAt(Map<String, dynamic>? trail, String state) {
+    final entry = trail?[state];
+    return entry is Map ? TimeUtils.parseServerTime(entry['at']) : null;
+  }
+
+  static int? _trailBy(Map<String, dynamic>? trail, String state) {
+    final entry = trail?[state];
+    return entry is Map ? _toInt(entry['by']) : null;
+  }
+
+  /// Builds an order from the Firestore document Odoo maintains.
   factory Order.fromJson(Map<String, dynamic> json) {
-    // Handle new Firestore JSON structure
-    final customer = json['customer'] as Map<String, dynamic>?;
-    final customerName = customer?['name'] ?? '';
-    final customerPhone = customer?['phone'] ?? '';
-    final deliveryAddress = customer?['address'] != null 
-        ? '${customer!['address']['street'] ?? ''} ${customer['address']['street2'] ?? ''} ${customer['address']['city'] ?? ''}'.trim()
-        : '';
-    
+    final customer = json['customer'] is Map ? Map<String, dynamic>.from(json['customer']) : null;
+    final address = customer?['address'] is Map ? customer!['address'] as Map : null;
+    final location = customer?['location'] is Map ? customer!['location'] as Map : null;
+    final branch = json['branch'] is Map ? json['branch'] as Map : null;
+    final trail = json['stateTrail'] is Map ? Map<String, dynamic>.from(json['stateTrail']) : null;
+    final paymentMode = (json['paymentMode'] ?? 'cod').toString();
+    final state = (json['status'] ?? '').toString();
+
+    final deliveryAddress = [address?['street'], address?['street2'], address?['city']]
+        .where((p) => p != null && p.toString().trim().isNotEmpty && p != false)
+        .join(', ');
+
+    final acceptedAt = _trailAt(trail, 'accepted');
+    final pickedUpAt = _trailAt(trail, 'dispatched');
+    final deliveredAt = _trailAt(trail, 'delivered');
+
+    OrderStatus status;
+    if (state == 'cancelled' || state == 'refund' || json['is_cancelled_or_refunded'] == true) {
+      status = OrderStatus.cancelled;
+    } else if (deliveredAt != null || state == 'delivered') {
+      status = OrderStatus.delivered;
+    } else if (pickedUpAt != null || state == 'dispatch') {
+      status = OrderStatus.pickedUp;
+    } else if (acceptedAt != null || state == 'accepted') {
+      status = OrderStatus.accepted;
+    } else {
+      status = OrderStatus.pending;
+    }
+
     return Order(
       id: json['id']?.toString() ?? '',
-      reference: json['reference'] ?? '',
-      customerName: customerName,
-      customerPhone: customerPhone,
-      pickupAddress: json['pickupAddress'] ?? '',
+      reference: (json['reference'] ?? '').toString(),
+      tossdownSequence: (json['tossdownSequence'] ?? '').toString(),
+      customerName: (customer?['name'] ?? '').toString(),
+      customerPhone: (customer?['phone'] ?? '').toString(),
+      pickupAddress: (branch?['name'] ?? '').toString(),
       deliveryAddress: deliveryAddress,
-      pickupLatitude: json['pickupLatitude']?.toDouble() ?? 0.0,
-      pickupLongitude: json['pickupLongitude']?.toDouble() ?? 0.0,
-      deliveryLatitude: customer?['location']?['latitude']?.toDouble() ?? 0.0,
-      deliveryLongitude: customer?['location']?['longitude']?.toDouble() ?? 0.0,
-      amount: json['amount']?.toDouble() ?? 0.0,
-      currency: json['currency'] ?? 'AED',
-      status: OrderStatus.values.firstWhere(
-        (e) => e.toString().split('.').last == json['status'],
-        orElse: () => OrderStatus.pending,
-      ),
-      priority: OrderPriority.values.firstWhere(
-        (e) => e.toString().split('.').last == json['priority'],
-        orElse: () => OrderPriority.medium,
-      ),
-      createdAt: DateTime.parse(json['createdAt'] ?? DateTime.now().toIso8601String()),
-      paymentMethod: json['paymentMethod'] ?? 'cash',
-      isPaid: json['isPaid'] ?? false,
-      isCancelledOrRefunded: json['is_cancelled_or_refunded'] ?? false,
-      estimatedDeliveryTime: json['estimatedDeliveryTime'] != null
-          ? DateTime.parse(json['estimatedDeliveryTime'])
-          : null,
-      notes: json['notes'],
-      riderId: json['riderId']?.toString(),
-      acceptedAt: json['acceptedAt'] != null
-          ? DateTime.parse(json['acceptedAt'])
-          : null,
-      pickedUpAt: json['pickedUpAt'] != null
-          ? DateTime.parse(json['pickedUpAt'])
-          : null,
-      deliveredAt: json['deliveredAt'] != null
-          ? DateTime.parse(json['deliveredAt'])
-          : null,
+      pickupLatitude: _toDouble(json['pickupLatitude']),
+      pickupLongitude: _toDouble(json['pickupLongitude']),
+      deliveryLatitude: _toDouble(location?['latitude']),
+      deliveryLongitude: _toDouble(location?['longitude']),
+      amount: _toDouble(json['amount']),
+      currency: (json['currency'] ?? 'PKR').toString(),
+      status: status,
+      createdAt: TimeUtils.parseServerTime(json['createdAt']) ?? DateTime.now(),
+      estimatedDeliveryTime: TimeUtils.parseServerTime(json['estimatedDeliveryTime']),
+      notes: json['notes']?.toString(),
+      riderId: (json['rider'] is Map ? json['rider']['riderID'] : null)?.toString(),
+      acceptedAt: acceptedAt,
+      pickedUpAt: pickedUpAt,
+      deliveredAt: deliveredAt,
       items: _extractItems(json),
-      stateTrail: json['stateTrail'] as Map<String, dynamic>?,
+      stateTrail: trail,
+      paymentMethod: paymentMode == 'cod' ? 'cash' : paymentMode,
+      paymentMode: paymentMode,
+      isCancelledOrRefunded: status == OrderStatus.cancelled,
+      liveOnApp: json['live_on_app'] == true,
+      orderType: (json['orderType'] ?? 'delivery').toString().toLowerCase(),
+      channel: (json['channel'] ?? '').toString(),
+      branchId: _toInt(branch?['id']),
+      branchName: (branch?['name'] ?? '').toString(),
+      deliveryKms: _toDouble(json['delivery_kms']),
+      acceptedBy: _trailBy(trail, 'accepted'),
+      deliveredBy: _trailBy(trail, 'delivered'),
     );
   }
 
-  // Extract items from the new JSON structure
   static List<String> _extractItems(Map<String, dynamic> json) {
     final items = json['items'] as List<dynamic>?;
     if (items == null) return [];
-    
     return items.map((item) {
-      if (item is Map<String, dynamic>) {
+      if (item is Map) {
         final name = item['name']?.toString() ?? '';
-        final qty = item['qty']?.toString() ?? '0';
-        return '$name ($qty x)';
+        final qty = item['qty'];
+        final q = qty is num && qty == qty.roundToDouble() ? qty.toInt().toString() : '${qty ?? 0}';
+        return '$name ($q x)';
       }
       return item.toString();
     }).toList();
   }
+
+  bool get isCashOnDelivery => paymentMode == 'cod';
+  bool get isDispatched => pickedUpAt != null;
+  bool get isDelivered => status == OrderStatus.delivered;
+
+  String get paymentLabel {
+    switch (paymentMode) {
+      case 'cod':
+        return 'Cash on Delivery';
+      case 'online':
+        return 'Paid Online';
+      case 'card':
+        return 'Card';
+      case 'wallet':
+        return 'Wallet';
+      case 'bank_transfer':
+        return 'Bank Transfer';
+      default:
+        return paymentMode;
+    }
+  }
+
+  /// Lower-cased text the search box matches against.
+  late final String searchText = [
+    reference,
+    tossdownSequence,
+    id,
+    customerName,
+    customerPhone,
+    customerPhone.replaceAll(RegExp(r'[^0-9]'), ''),
+    deliveryAddress,
+  ].join(' ').toLowerCase();
 
   Map<String, dynamic> toJson() {
     return {
@@ -150,687 +239,359 @@ class Order {
       'reference': reference,
       'customerName': customerName,
       'customerPhone': customerPhone,
-      'pickupAddress': pickupAddress,
       'deliveryAddress': deliveryAddress,
-      'pickupLatitude': pickupLatitude,
-      'pickupLongitude': pickupLongitude,
-      'deliveryLatitude': deliveryLatitude,
-      'deliveryLongitude': deliveryLongitude,
       'amount': amount,
       'currency': currency,
-      'status': status.toString().split('.').last,
-      'priority': priority.toString().split('.').last,
+      'status': status.name,
       'createdAt': createdAt.toIso8601String(),
-      'estimatedDeliveryTime': estimatedDeliveryTime?.toIso8601String(),
-      'notes': notes,
-      'riderId': riderId,
-      'acceptedAt': acceptedAt?.toIso8601String(),
-      'pickedUpAt': pickedUpAt?.toIso8601String(),
-      'deliveredAt': deliveredAt?.toIso8601String(),
-      // Note: items are handled separately in OrderDao
-      'paymentMethod': paymentMethod,
-      'isPaid': isPaid,
-      'is_cancelled_or_refunded': isCancelledOrRefunded,
+      'paymentMode': paymentMode,
     };
-  }
-
-  Order copyWith({
-    String? id,
-    String? reference,
-    String? customerName,
-    String? customerPhone,
-    String? pickupAddress,
-    String? deliveryAddress,
-    double? pickupLatitude,
-    double? pickupLongitude,
-    double? deliveryLatitude,
-    double? deliveryLongitude,
-    double? amount,
-    String? currency,
-    OrderStatus? status,
-    OrderPriority? priority,
-    DateTime? createdAt,
-    DateTime? estimatedDeliveryTime,
-    String? notes,
-    String? riderId,
-    DateTime? acceptedAt,
-    DateTime? pickedUpAt,
-    DateTime? deliveredAt,
-    List<String>? items,
-    Map<String, dynamic>? stateTrail,
-    String? paymentMethod,
-    bool? isPaid,
-    bool? isCancelledOrRefunded,
-  }) {
-    return Order(
-      id: id ?? this.id,
-      reference: reference ?? this.reference,
-      customerName: customerName ?? this.customerName,
-      customerPhone: customerPhone ?? this.customerPhone,
-      pickupAddress: pickupAddress ?? this.pickupAddress,
-      deliveryAddress: deliveryAddress ?? this.deliveryAddress,
-      pickupLatitude: pickupLatitude ?? this.pickupLatitude,
-      pickupLongitude: pickupLongitude ?? this.pickupLongitude,
-      deliveryLatitude: deliveryLatitude ?? this.deliveryLatitude,
-      deliveryLongitude: deliveryLongitude ?? this.deliveryLongitude,
-      amount: amount ?? this.amount,
-      currency: currency ?? this.currency,
-      status: status ?? this.status,
-      priority: priority ?? this.priority,
-      createdAt: createdAt ?? this.createdAt,
-      estimatedDeliveryTime: estimatedDeliveryTime ?? this.estimatedDeliveryTime,
-      notes: notes ?? this.notes,
-      riderId: riderId ?? this.riderId,
-      acceptedAt: acceptedAt ?? this.acceptedAt,
-      pickedUpAt: pickedUpAt ?? this.pickedUpAt,
-      deliveredAt: deliveredAt ?? this.deliveredAt,
-      items: items ?? this.items,
-      stateTrail: stateTrail ?? this.stateTrail,
-      paymentMethod: paymentMethod ?? this.paymentMethod,
-      isPaid: isPaid ?? this.isPaid,
-      isCancelledOrRefunded: isCancelledOrRefunded ?? this.isCancelledOrRefunded,
-    );
   }
 }
 
+/// Supplies the three order tabs from a single Firestore listener.
+///
+/// Visibility rule (agreed with operations):
+/// * orders placed since local midnight are shown;
+/// * orders from the previous day stay only while they are not delivered
+///   (so an order placed at 11:50 PM can still be finished after midnight);
+/// * once delivered, a previous-day order disappears.
 class OrderProvider extends ChangeNotifier {
   List<Order> _availableOrders = [];
   List<Order> _acceptedOrders = [];
   List<Order> _completedOrders = [];
+  List<Order> _deliveredToday = [];
   bool _isLoading = false;
+  bool _hasLoadedOnce = false;
   String? _error;
   String? _currentUserId;
+  String _query = '';
+  final Set<String> _busyOrderIds = {};
+  List<Map<String, dynamic>> _lastSnapshot = const [];
+
+  StreamSubscription<List<Map<String, dynamic>>>? _ordersSub;
+  Timer? _midnightTimer;
+
   // Branch IDs this rider is allowed to see orders for.
   // null  = field absent on rider doc → no restriction.
   // []    = field present but empty  → block ALL orders.
   // [..] = filter to these branch IDs.
   List<int>? _allowedBranchIds;
 
-  // Getters
-  List<Order> get availableOrders => _availableOrders;
-  List<Order> get acceptedOrders => _acceptedOrders;
-  List<Order> get completedOrders => _completedOrders;
+  List<Order> get availableOrders => _filter(_availableOrders);
+  List<Order> get acceptedOrders => _filter(_acceptedOrders);
+  List<Order> get completedOrders => _filter(_completedOrders);
+  int get availableCount => _availableOrders.length;
+  int get acceptedCount => _acceptedOrders.length;
+  int get completedCount => _completedOrders.length;
   bool get isLoading => _isLoading;
+  bool get hasLoadedOnce => _hasLoadedOnce;
   String? get error => _error;
+  String get query => _query;
+  bool isBusy(String orderId) => _busyOrderIds.contains(orderId);
 
-  // Get Cash on Delivery (COD) orders
-  List<Order> get codOrders {
-    return _completedOrders.where((order) => 
-      order.paymentMethod.toLowerCase() == 'cash' && !order.isPaid
-    ).toList();
-  }
+  /// Deliveries this rider completed since local midnight.
+  List<Order> get deliveredToday => _deliveredToday;
 
-  // Get Total Cash to Collect
-  double get totalCashToCollect {
-    return codOrders.fold(0.0, (sum, order) => sum + order.amount);
-  }
+  /// Cash-on-delivery orders delivered today (money the rider is holding).
+  List<Order> get codOrders => _deliveredToday.where((o) => o.isCashOnDelivery).toList();
 
-  // Get current active order
-  Order? get currentOrder {
-    final activeOrders = _acceptedOrders.where(
-      (order) => order.status == OrderStatus.accepted || 
-                  order.status == OrderStatus.pickedUp
-    ).toList();
-    return activeOrders.isNotEmpty ? activeOrders.first : null;
-  }
+  double get totalCashToCollect => codOrders.fold(0.0, (sum, o) => sum + o.amount);
 
-  // Set current user ID for filtering
+  double get kmsToday => _deliveredToday.fold(0.0, (sum, o) => sum + o.deliveryKms);
+
+  Order? get currentOrder => _acceptedOrders.isNotEmpty ? _acceptedOrders.first : null;
+
   void setCurrentUserId(String userId) {
     _currentUserId = userId;
   }
 
-  // Initialize orders with efficient queries
-  // Future<void> initializeOrders() async {
-  //   _setLoading(true);
-  //   try {
-  //     if (_currentUserId == null) {
-  //       _error = 'User not authenticated';
-  //       return;
-  //     }
-  //
-  //     // One-time sync from API into Firestore (temporary)
-  //     // await _syncOrdersFromAPIToFirestore();
-  //
-  //     // Listen to draft orders (upcoming tab)
-  //     FirebaseService.streamDraftOrders().listen((orders) {
-  //       _availableOrders.clear();
-  //       for (final json in orders) {
-  //         // Client-side filter: only show orders that are draft and not accepted
-  //         final stateTrail = json['stateTrail'] as Map<String, dynamic>?;
-  //         if (stateTrail != null) {
-  //           final draftState = stateTrail['draft'];
-  //           final acceptedState = stateTrail['accepted'];
-  //
-  //           // Only show if draft exists and accepted does not exist
-  //           if (draftState != null && draftState['at'] != null &&
-  //               (acceptedState == null || acceptedState['at'] == null)) {
-  //             final order = Order.fromJson(json);
-  //             _availableOrders.add(order);
-  //           }
-  //         }
-  //       }
-  //       notifyListeners();
-  //     });
-  //
-  //     // Listen to accepted orders by current user (ongoing tab)
-  //     FirebaseService.streamAcceptedOrdersByUser(_currentUserId!).listen((orders) {
-  //       _acceptedOrders.clear();
-  //       for (final json in orders) {
-  //         // Client-side filter: only show orders that are accepted but not delivered
-  //         final stateTrail = json['stateTrail'] as Map<String, dynamic>?;
-  //         if (stateTrail != null) {
-  //           final acceptedState = stateTrail['accepted'];
-  //           final deliveredState = stateTrail['delivered'];
-  //
-  //           // Only show if accepted exists and delivered does not exist
-  //           if (acceptedState != null && acceptedState['at'] != null &&
-  //               (deliveredState == null || deliveredState['at'] == null)) {
-  //             final order = Order.fromJson(json);
-  //             _acceptedOrders.add(order);
-  //           }
-  //         }
-  //       }
-  //       notifyListeners();
-  //     });
-  //
-  //     // Listen to delivered orders by current user (completed tab)
-  //     FirebaseService.streamDeliveredOrdersByUser(_currentUserId!).listen((orders) {
-  //       _completedOrders.clear();
-  //       for (final json in orders) {
-  //         // Client-side filter: only show orders that are delivered
-  //         final stateTrail = json['stateTrail'] as Map<String, dynamic>?;
-  //         if (stateTrail != null) {
-  //           final deliveredState = stateTrail['delivered'];
-  //
-  //           // Only show if delivered exists
-  //           if (deliveredState != null && deliveredState['at'] != null) {
-  //             final order = Order.fromJson(json);
-  //             _completedOrders.add(order);
-  //           }
-  //         }
-  //       }
-  //       notifyListeners();
-  //     });
-  //
-  //     notifyListeners();
-  //   } catch (e) {
-  //     _error = 'Failed to load orders';
-  //   } finally {
-  //     _setLoading(false);
-  //   }
-  // }
+  void setSearchQuery(String value) {
+    final q = value.trim().toLowerCase();
+    if (q == _query) return;
+    _query = q;
+    notifyListeners();
+  }
 
-// Initialize orders with efficient queries and proper sorting
-// Initialize orders with efficient queries and proper sorting
+  List<Order> _filter(List<Order> orders) {
+    if (_query.isEmpty) return orders;
+    final digits = _query.replaceAll(RegExp(r'[^0-9]'), '');
+    return orders.where((o) {
+      if (o.searchText.contains(_query)) return true;
+      // "0300 1234567" should match "+923001234567"
+      return digits.length >= 4 && o.searchText.contains(digits);
+    }).toList();
+  }
+
+  /// Starts (or restarts) the live order feed.
   Future<void> initializeOrders() async {
-    _setLoading(true);
-    try {
-      if (_currentUserId == null) {
-        _error = 'User not authenticated';
-        return;
-      }
-
-      // Fetch this rider's allowed branch IDs before setting up streams.
-      // If the field is absent the list will be empty → no branch filter applied.
-      _allowedBranchIds =
-          await FirebaseService.getRiderAllowedBranchIds(_currentUserId!);
-      if (kDebugMode) {
-        if (_allowedBranchIds == null) {
-          print('Rider $_currentUserId allowedBranchIds: null (no restriction)');
-        } else if (_allowedBranchIds!.isEmpty) {
-          print('Rider $_currentUserId allowedBranchIds: [] (NO branch access — all orders blocked)');
-        } else {
-          print('Rider $_currentUserId allowedBranchIds: $_allowedBranchIds');
-        }
-      }
-
-      // Listen to draft orders (upcoming tab) - sorted by createdAt
-      FirebaseService.streamDraftOrders().listen((orders) {
-        _availableOrders.clear();
-        for (final json in orders) {
-          // Only show orders that are live on app
-          if (json['live_on_app'] != true) {
-            continue;
-          }
-          // Filter by allowed branch IDs
-          if (!_isBranchAllowed(json)) {
-            continue;
-          }
-          // Hide pick orders from riders
-          final orderType = (json['orderType'] ?? '').toString().toLowerCase();
-          if (orderType == 'pick') {
-            continue;
-          }
-          // Filter out cancelled or refunded orders
-          if (json['is_cancelled_or_refunded'] == true) {
-            continue;
-          }
-
-          final stateTrail = json['stateTrail'] as Map<String, dynamic>?;
-          if (stateTrail != null) {
-            final draftState = stateTrail['draft'] as Map<String, dynamic>?;
-            final acceptedState = stateTrail['accepted'] as Map<String, dynamic>?;
-
-            if (draftState != null && draftState['at'] != null &&
-                (acceptedState == null || acceptedState['at'] == null)) {
-              final order = Order.fromJson(json);
-              _availableOrders.add(order);
-            }
-          }
-        }
-
-        // Additional client-side sorting by createdAt (descending - newest first)
-        _availableOrders.sort((a, b) {
-          final aTime = a.createdAt.millisecondsSinceEpoch;
-          final bTime = b.createdAt.millisecondsSinceEpoch;
-          return bTime.compareTo(aTime); // Descending order
-        });
-
-        notifyListeners();
-      });
-
-      // Listen to accepted orders by current user (ongoing tab) - sorted by accepted.at
-      FirebaseService.streamAcceptedOrdersByUser(_currentUserId!).listen((orders) {
-        _acceptedOrders.clear();
-        for (final json in orders) {
-          // Only show orders that are live on app
-          if (json['live_on_app'] != true) {
-            continue;
-          }
-          // Filter by allowed branch IDs
-          if (!_isBranchAllowed(json)) {
-            continue;
-          }
-          // Hide pick orders from riders
-          final orderType = (json['orderType'] ?? '').toString().toLowerCase();
-          if (orderType == 'pick') {
-            continue;
-          }
-          // Filter out cancelled or refunded orders
-          if (json['is_cancelled_or_refunded'] == true) {
-            continue;
-          }
-
-          final stateTrail = json['stateTrail'] as Map<String, dynamic>?;
-          if (stateTrail != null) {
-            final acceptedState = stateTrail['accepted'] as Map<String, dynamic>?;
-            final deliveredState = stateTrail['delivered'] as Map<String, dynamic>?;
-
-            if (acceptedState != null && acceptedState['at'] != null &&
-                (deliveredState == null || deliveredState['at'] == null)) {
-              final order = Order.fromJson(json);
-              _acceptedOrders.add(order);
-            }
-          }
-        }
-
-        // Additional client-side sorting by accepted.at (descending - newest first)
-        _acceptedOrders.sort((a, b) {
-          final aStateTrail = a.stateTrail;
-          final bStateTrail = b.stateTrail;
-
-          if (aStateTrail == null || bStateTrail == null) return 0;
-
-          final aAccepted = aStateTrail['accepted'] as Map<String, dynamic>?;
-          final bAccepted = bStateTrail['accepted'] as Map<String, dynamic>?;
-
-          if (aAccepted == null || bAccepted == null) return 0;
-
-          final aTimeStr = aAccepted['at'] as String?;
-          final bTimeStr = bAccepted['at'] as String?;
-
-          if (aTimeStr == null || bTimeStr == null) return 0;
-
-          final aTime = DateTime.parse(aTimeStr).millisecondsSinceEpoch;
-          final bTime = DateTime.parse(bTimeStr).millisecondsSinceEpoch;
-          return bTime.compareTo(aTime); // Descending order
-        });
-
-        notifyListeners();
-      });
-
-      // Listen to delivered orders by current user (completed tab) - sorted by delivered.at
-      FirebaseService.streamDeliveredOrdersByUser(_currentUserId!).listen((orders) {
-        _completedOrders.clear();
-        for (final json in orders) {
-          // Only show orders that are live on app
-          if (json['live_on_app'] != true) {
-            continue;
-          }
-          // Filter by allowed branch IDs
-          if (!_isBranchAllowed(json)) {
-            continue;
-          }
-          // Hide pick orders from riders
-          final orderType = (json['orderType'] ?? '').toString().toLowerCase();
-          if (orderType == 'pick') {
-            continue;
-          }
-          // Filter out cancelled or refunded orders
-          if (json['is_cancelled_or_refunded'] == true) {
-            continue;
-          }
-
-          final stateTrail = json['stateTrail'] as Map<String, dynamic>?;
-          if (stateTrail != null) {
-            final deliveredState = stateTrail['delivered'] as Map<String, dynamic>?;
-
-            if (deliveredState != null && deliveredState['at'] != null) {
-              final order = Order.fromJson(json);
-              _completedOrders.add(order);
-            }
-          }
-        }
-
-        // Additional client-side sorting by delivered.at (descending - newest first)
-        _completedOrders.sort((a, b) {
-          final aStateTrail = a.stateTrail;
-          final bStateTrail = b.stateTrail;
-
-          if (aStateTrail == null || bStateTrail == null) return 0;
-
-          final aDelivered = aStateTrail['delivered'] as Map<String, dynamic>?;
-          final bDelivered = bStateTrail['delivered'] as Map<String, dynamic>?;
-
-          if (aDelivered == null || bDelivered == null) return 0;
-
-          final aTimeStr = aDelivered['at'] as String?;
-          final bTimeStr = bDelivered['at'] as String?;
-
-          if (aTimeStr == null || bTimeStr == null) return 0;
-
-          final aTime = DateTime.parse(aTimeStr).millisecondsSinceEpoch;
-          final bTime = DateTime.parse(bTimeStr).millisecondsSinceEpoch;
-          return bTime.compareTo(aTime); // Descending order
-        });
-
-        notifyListeners();
-      });
-
+    if (_currentUserId == null) {
+      _error = 'User not authenticated';
       notifyListeners();
+      return;
+    }
+    _setLoading(true);
+    _error = null;
+    try {
+      _allowedBranchIds = await FirebaseService.getRiderAllowedBranchIds(_currentUserId!);
+      _subscribe();
     } catch (e) {
       _error = 'Failed to load orders: $e';
-    } finally {
       _setLoading(false);
     }
   }
 
-  // Fetch from Odoo API and upsert into Firestore as a full order JSON
-  Future<void> _syncOrdersFromAPIToFirestore() async {
-    try {
-      final apiOrders = await ApiService.getAvailableOrders();
-      
-      for (final orderData in apiOrders) {
-        final odooOrder = OdooOrder.fromJson(orderData);
-        
-        // Get order line items
-        final lineItems = await ApiService.getOrderLineItems(odooOrder.lineIds);
-        final orderWithItems = odooOrder.copyWith(
-          lineItems: lineItems.map((item) => OdooOrderLine.fromJson(item)).toList(),
-        );
-        
-        // Build full, single JSON document with nested customer and line items and state trail
-        final customerId = odooOrder.customerId.isNotEmpty ? (odooOrder.customerId.first as int? ?? 0) : 0;
-        Map<String, dynamic>? customer;
-        if (customerId > 0) {
-          customer = await ApiService.getPartnerById(customerId);
-        }
+  void _subscribe() {
+    _ordersSub?.cancel();
+    _midnightTimer?.cancel();
 
-        final orderJson = {
-          'id': odooOrder.id,
-          'reference': odooOrder.reference,
-          'tossdownSequence': odooOrder.tossdownSequence,
-          'status': OrderStatus.pending.toString().split('.').last, // initial map from Confirm→pending already handled downstream
-          'createdAt': odooOrder.createDate,
-          'writeDate': odooOrder.writeDate,
-          'orderType': odooOrder.orderType,
-          'paymentMode': odooOrder.paymentMode,
-          'amount': odooOrder.grandTotal,
-          'currency': 'AED',
-          'branch': {
-            'id': odooOrder.branch.isNotEmpty ? (odooOrder.branch.first as int? ?? 0) : 0,
-            'name': odooOrder.branch.isNotEmpty ? odooOrder.branch[1].toString() : '',
-          },
-          'customer': customer != null ? {
-            'id': customer['id'],
-            'name': customer['name'] ?? '',
-            'email': customer['email'] ?? '',
-            'phone': customer['phone'] ?? customer['mobile'] ?? '',
-            'address': {
-              'street': customer['street'] ?? '',
-              'street2': customer['street2'] ?? '',
-              'city': customer['city'] ?? '',
-              'zip': customer['zip'] ?? '',
-            },
-            'location': {
-              'latitude': customer['partner_latitude']?.toDouble() ?? 0.0,
-              'longitude': customer['partner_longitude']?.toDouble() ?? 0.0,
-            },
-          } : {
-            'id': customerId,
-            'name': odooOrder.customerId.isNotEmpty ? odooOrder.customerId[1].toString() : '',
-            'email': '',
-            'phone': '',
-            'address': {
-              'street': '',
-              'street2': '',
-              'city': '',
-              'zip': '',
-            },
-            'location': {
-              'latitude': 0.0,
-              'longitude': 0.0,
-            },
-          },
-          'items': orderWithItems.lineItems?.map((li) => {
-            'id': li.id,
-            'name': li.itemName.isNotEmpty ? li.itemName[1].toString() : '',
-            'brand': li.brand.isNotEmpty ? li.brand[1].toString() : '',
-            'qty': li.qty,
-            'price': li.price,
-            'total': li.total,
-          }).toList() ?? [],
-          // State trail sub-jsons: draft/accepted/dispatched/delivered
-          'stateTrail': {
-            'draft': {
-              'at': odooOrder.createDate,
-              'by': null,
-            },
-            'accepted': null,
-            'dispatched': null,
-            'delivered': null,
-          },
-          'is_cancelled_or_refunded': false,
-        };
+    final since = TimeUtils.carryOverStart();
+    _ordersSub = FirebaseService.streamOrdersPlacedSince(since).listen(
+      (docs) {
+        _lastSnapshot = docs;
+        _rebuild();
+        _hasLoadedOnce = true;
+        _error = null;
+        _setLoading(false);
+      },
+      onError: (Object e) {
+        _error = 'Could not load orders. Pull down to retry.';
+        if (kDebugMode) print('Order stream error: $e');
+        _setLoading(false);
+      },
+    );
 
-        await FirebaseService.upsertOrder(orderJson);
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error syncing orders to Firestore: $e');
-      }
-    }
+    // At midnight yesterday's delivered orders must disappear and the query
+    // window moves forward a day.
+    _midnightTimer = Timer(TimeUtils.untilNextMidnight() + const Duration(seconds: 2), _subscribe);
   }
 
+  void _rebuild() {
+    final buckets = bucketOrders(
+      _lastSnapshot,
+      riderId: int.tryParse(_currentUserId ?? ''),
+      allowedBranchIds: _allowedBranchIds,
+    );
+    _availableOrders = buckets.available;
+    _acceptedOrders = buckets.accepted;
+    _completedOrders = buckets.completed;
+    _deliveredToday = buckets.deliveredToday;
+    notifyListeners();
+  }
 
-  // Accept order
-  Future<bool> acceptOrder(String orderId, String riderId) async {
-    try {
-      if (_currentUserId == null) {
-        _error = 'User not authenticated';
-          return false;
+  /// Splits Firestore order documents into the three tabs (pure; unit-tested).
+  @visibleForTesting
+  static ({
+    List<Order> available,
+    List<Order> accepted,
+    List<Order> completed,
+    List<Order> deliveredToday,
+  }) bucketOrders(
+    List<Map<String, dynamic>> docs, {
+    required int? riderId,
+    List<int>? allowedBranchIds,
+    DateTime? now,
+  }) {
+    final todayStart = TimeUtils.startOfToday(now);
+    final carryOverStart = TimeUtils.carryOverStart(now);
+    final available = <Order>[];
+    final accepted = <Order>[];
+    final completed = <Order>[];
+    final deliveredToday = <Order>[];
+
+    for (final json in docs) {
+      if (json['live_on_app'] != true) continue;
+      if ((json['orderType'] ?? '').toString().toLowerCase() == 'pick') continue;
+      if (!_branchAllowed(json, allowedBranchIds)) continue;
+
+      final Order order;
+      try {
+        order = Order.fromJson(json);
+      } catch (e) {
+        if (kDebugMode) print('Skipping malformed order ${json['id']}: $e');
+        continue;
       }
+      if (order.status == OrderStatus.cancelled) continue;
+      if (order.createdAt.isBefore(carryOverStart)) continue;
 
-      // Update state in Odoo backend first
-      final apiSuccess = await ApiService.updateOrderState(int.parse(orderId), 'accepted');
-      
-      if (apiSuccess) {
-        // Update state trail in Firestore
-        await FirebaseService.updateOrderStateTrail(orderId, 'accepted', _currentUserId!);
-        
-        // The real-time listener will automatically update the UI
-        return true;
-      } else {
-        _error = 'Failed to update order state in backend';
+      final placedToday = !order.createdAt.isBefore(todayStart);
+
+      if (order.isDelivered) {
+        if (order.deliveredBy == riderId || (order.deliveredBy == null && order.acceptedBy == riderId)) {
+          // Previous-day orders disappear once delivered.
+          if (placedToday) completed.add(order);
+          if (order.deliveredAt != null && !order.deliveredAt!.isBefore(todayStart)) {
+            deliveredToday.add(order);
+          }
+        }
+      } else if (order.acceptedAt != null) {
+        if (order.acceptedBy == riderId) accepted.add(order);
+      } else if (order.stateTrail?['draft'] is Map) {
+        available.add(order);
+      }
+    }
+
+    int newestFirst(DateTime? a, DateTime? b) => (b ?? DateTime(0)).compareTo(a ?? DateTime(0));
+    available.sort((a, b) => newestFirst(a.createdAt, b.createdAt));
+    accepted.sort((a, b) => newestFirst(a.acceptedAt, b.acceptedAt));
+    completed.sort((a, b) => newestFirst(a.deliveredAt, b.deliveredAt));
+    deliveredToday.sort((a, b) => newestFirst(a.deliveredAt, b.deliveredAt));
+
+    return (
+      available: available,
+      accepted: accepted,
+      completed: completed,
+      deliveredToday: deliveredToday,
+    );
+  }
+
+  /// Accept: Odoo first (it assigns the rider), then the Firestore trail.
+  Future<bool> acceptOrder(String orderId, [String? _]) async {
+    if (_currentUserId == null) {
+      _error = 'User not authenticated';
+      return false;
+    }
+    if (!_busyOrderIds.add(orderId)) return false;
+    notifyListeners();
+    try {
+      final ok = await ApiService.updateOrderState(int.parse(orderId), 'accepted');
+      if (!ok) {
+        _error = 'Could not accept the order. It may already be taken.';
         return false;
       }
+      await FirebaseService.updateOrderStateTrail(orderId, 'accepted', _currentUserId!);
+      return true;
     } catch (e) {
       _error = 'Failed to accept order';
       return false;
+    } finally {
+      _busyOrderIds.remove(orderId);
+      notifyListeners();
     }
   }
 
-  // Update delivery_kms in Odoo once (first time only), and mirror to Firestore
+  /// Stores the route estimate (for on-time analytics). The official KMs are
+  /// the road distance Odoo computes, so nothing is written to Odoo here.
   Future<bool> updateDeliveryKmsOnce(String orderId, double kms, {double? estimatedSeconds}) async {
     try {
-      // Guard: check if already updated in Firestore
+      if (estimatedSeconds == null || estimatedSeconds <= 0) return true;
       final existing = await FirebaseService.getOrderById(orderId);
-      if (existing != null) {
-        final already = existing['delivery_kms'];
-        if (already != null) {
-          return true; // already updated
-        }
-      }
-
-      // Update in Odoo (kms only)
-      final apiOk = await ApiService.updateOrderFields(int.parse(orderId), {
-        'delivery_kms': kms,
+      if (existing?['estimatedDeliveryTime'] != null) return true;
+      await FirebaseService.updateOrderFields(orderId, {
+        'estimatedDeliveryTime':
+            DateTime.now().toUtc().add(Duration(seconds: estimatedSeconds.round())).toIso8601String(),
+        'route_duration_seconds': estimatedSeconds,
+        'rider_route_kms': kms,
       });
-      if (!apiOk) return false;
-
-      // Mirror to Firestore and set guard
-      // If we have an estimate from the route, use it to set the deadline
-      final Map<String, dynamic> fieldsToUpdate = {
-        'delivery_kms': kms,
-        'delivery_kms_updated_at': DateTime.now().toIso8601String(),
-      };
-
-      if (estimatedSeconds != null && estimatedSeconds > 0) {
-        final estimate = DateTime.now().add(Duration(seconds: estimatedSeconds.round()));
-        fieldsToUpdate['estimatedDeliveryTime'] = estimate.toIso8601String();
-        fieldsToUpdate['route_duration_seconds'] = estimatedSeconds;
-      }
-
-      await FirebaseService.updateOrderFields(orderId, fieldsToUpdate);
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  // Update order status
-  Future<bool> updateOrderStatus(String orderId, OrderStatus newStatus) async {
-    try {
-      if (_currentUserId == null) {
-        _error = 'User not authenticated';
-          return false;
-      }
+  /// [backendAlreadyUpdated]: the proof-of-delivery upload already set the
+  /// state in Odoo, so only the Firestore trail needs writing.
+  Future<bool> updateOrderStatus(
+    String orderId,
+    OrderStatus newStatus, {
+    bool backendAlreadyUpdated = false,
+  }) async {
+    if (_currentUserId == null) {
+      _error = 'User not authenticated';
+      return false;
+    }
 
-      // Map OrderStatus to state trail state and Odoo state
-      String stateTrailState;
-      String? odooState;
-      
-      switch (newStatus) {
-        case OrderStatus.pickedUp:
-          // Rider picks up order - this should only update Firestore, not Odoo
-          // Manager handles accepted → dispatch in Odoo
-          stateTrailState = 'dispatched';
-          odooState = null; // No Odoo update for picked up
-          break;
-        case OrderStatus.delivered:
-          // Rider delivers order - update Odoo from dispatch → delivered
-          stateTrailState = 'delivered';
-          odooState = 'delivered';
-          break;
-        case OrderStatus.cancelled:
-          // Rider cancels order - update Odoo
-          stateTrailState = 'cancelled';
-          odooState = 'cancelled';
-          break;
-        default:
-          _error = 'Invalid status for update';
-          return false;
-      }
-
-      // Update state in Odoo backend first (if applicable)
-      bool apiSuccess = true;
-      if (odooState != null) {
-        apiSuccess = await ApiService.updateOrderState(int.parse(orderId), odooState);
-      }
-      
-      if (apiSuccess) {
-        // Update state trail in Firestore
-        await FirebaseService.updateOrderStateTrail(orderId, stateTrailState, _currentUserId!);
-
-        // If cancelled, update the flag
-        if (newStatus == OrderStatus.cancelled) {
-          await FirebaseService.updateOrderFields(orderId, {
-            'is_cancelled_or_refunded': true,
-          });
-        }
-
-        // If order was delivered, update rider statistics
-        if (newStatus == OrderStatus.delivered) {
-          // Trigger statistics refresh in AuthProvider
-          // This will be handled by the UI layer
-        }
-
-        // The real-time listener will automatically update the UI
-        return true;
-      } else {
-        _error = 'Failed to update order state in backend';
+    String stateTrailState;
+    String? odooState;
+    switch (newStatus) {
+      case OrderStatus.pickedUp:
+        // Rider starts the ride; the office handles accepted → dispatch in Odoo.
+        stateTrailState = 'dispatched';
+        odooState = null;
+        break;
+      case OrderStatus.delivered:
+        stateTrailState = 'delivered';
+        odooState = backendAlreadyUpdated ? null : 'delivered';
+        break;
+      case OrderStatus.cancelled:
+        stateTrailState = 'cancelled';
+        odooState = 'cancelled';
+        break;
+      default:
+        _error = 'Invalid status for update';
         return false;
+    }
+
+    try {
+      if (odooState != null) {
+        final ok = await ApiService.updateOrderState(int.parse(orderId), odooState);
+        if (!ok) {
+          _error = 'Failed to update order state in backend';
+          return false;
+        }
       }
+      await FirebaseService.updateOrderStateTrail(orderId, stateTrailState, _currentUserId!);
+      if (newStatus == OrderStatus.cancelled) {
+        await FirebaseService.updateOrderFields(orderId, {'is_cancelled_or_refunded': true});
+      }
+      return true;
     } catch (e) {
       _error = 'Failed to update order status';
       return false;
     }
   }
 
-
-
-  // Returns true if the order's branch is in the rider's allowed list.
-  // null  → field absent (no restriction)  → allow all orders.
-  // []    → field present but empty        → block all orders.
-  // [..] → filter to those IDs.
-  bool _isBranchAllowed(Map<String, dynamic> json) {
-    // null means field doesn't exist on rider doc – no restriction
-    if (_allowedBranchIds == null) return true;
-    // Empty list means the rider has no branch access – block everything
-    if (_allowedBranchIds!.isEmpty) return false;
-    final branchMap = json['branch'] as Map<String, dynamic>?;
-    if (branchMap == null) return false; // order has no branch info → block
+  static bool _branchAllowed(Map<String, dynamic> json, List<int>? allowed) {
+    if (allowed == null) return true;
+    if (allowed.isEmpty) return false;
+    final branchMap = json['branch'];
+    if (branchMap is! Map) return false;
     final rawId = branchMap['id'];
-    if (rawId == null) return false;
-    final branchId =
-        (rawId is int) ? rawId : int.tryParse(rawId.toString()) ?? -1;
-    return _allowedBranchIds!.contains(branchId);
+    final branchId = rawId is int ? rawId : int.tryParse(rawId?.toString() ?? '') ?? -1;
+    return allowed.contains(branchId);
   }
 
-  // Set loading state
+  /// Stops listening (logout).
+  void reset() {
+    _ordersSub?.cancel();
+    _ordersSub = null;
+    _midnightTimer?.cancel();
+    _availableOrders = [];
+    _acceptedOrders = [];
+    _completedOrders = [];
+    _deliveredToday = [];
+    _lastSnapshot = const [];
+    _hasLoadedOnce = false;
+    _currentUserId = null;
+    _query = '';
+    notifyListeners();
+  }
+
   void _setLoading(bool loading) {
     _isLoading = loading;
     notifyListeners();
   }
 
-  // Clear error
   void clearError() {
     _error = null;
     notifyListeners();
   }
 
-  // Get order by ID
   Order? getOrderById(String orderId) {
-    final allOrders = [..._availableOrders, ..._acceptedOrders, ..._completedOrders];
-    try {
-      return allOrders.firstWhere((order) => order.id == orderId);
-    } catch (e) {
-      return null;
+    for (final list in [_availableOrders, _acceptedOrders, _completedOrders]) {
+      for (final order in list) {
+        if (order.id == orderId) return order;
+      }
     }
+    return null;
   }
 
-  // Accept order (simplified version for compatibility)
-  Future<bool> acceptOrderSimple(String orderId) async {
-    return acceptOrder(orderId, 'current_rider_id');
+  Future<bool> acceptOrderSimple(String orderId) => acceptOrder(orderId);
+
+  @override
+  void dispose() {
+    _ordersSub?.cancel();
+    _midnightTimer?.cancel();
+    super.dispose();
   }
-} 
+}

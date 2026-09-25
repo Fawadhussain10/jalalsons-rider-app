@@ -967,7 +967,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     if (result == true && mounted) {
       // POD submitted successfully, update local status
       final orderProvider = context.read<OrderProvider>();
-      await orderProvider.updateOrderStatus(widget.order.id.toString(), OrderStatus.delivered);
+      // The proof-of-delivery upload already marked it delivered in Odoo.
+      await orderProvider.updateOrderStatus(
+        widget.order.id.toString(),
+        OrderStatus.delivered,
+        backendAlreadyUpdated: true,
+      );
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

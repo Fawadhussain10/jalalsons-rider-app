@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/firebase_service.dart';
+import '../services/credential_store.dart';
+import '../services/push_service.dart';
 import '../utils/error_logger.dart';
 import 'order_provider.dart';
 import '../models/shift_model.dart';
@@ -55,31 +57,31 @@ class Rider {
 
   factory Rider.fromJson(Map<String, dynamic> json) {
     return Rider(
-      id: json['id'] ?? '',
-      name: json['name'] ?? '',
-      email: json['email'] ?? '',
-      phone: json['phone'] ?? '',
-      vehicleNumber: json['vehicleNumber'] ?? '',
-      vehicleType: json['vehicleType'] ?? '',
-      isOnline: json['isOnline'] ?? false,
-      profileImage: json['profileImage'],
-      totalOrders: json['totalOrders'] ?? 0,
-      completedOrders: json['completedOrders'] ?? 0,
-      todayCompletedOrders: json['todayCompletedOrders'] ?? 0,
-      rating: (json['rating'] ?? 0.0).toDouble(),
-      totalEarnings: json['totalEarnings'] ?? 0,
-      totalKms: (json['totalKms'] ?? 0.0).toDouble(),
-      lastActiveAt: json['lastActiveAt'] != null
-          ? DateTime.parse(json['lastActiveAt'])
-          : null,
-      joinedAt: json['joinedAt'] != null
-          ? DateTime.parse(json['joinedAt'])
-          : null,
+      id: (json['id'] ?? '').toString(),
+      name: (json['name'] ?? '').toString(),
+      email: (json['email'] ?? '').toString(),
+      phone: (json['phone'] ?? '').toString(),
+      vehicleNumber: (json['vehicleNumber'] ?? '').toString(),
+      vehicleType: (json['vehicleType'] ?? '').toString(),
+      isOnline: json['isOnline'] == true,
+      profileImage: json['profileImage']?.toString(),
+      totalOrders: _asInt(json['totalOrders']),
+      completedOrders: _asInt(json['total_delivered_orders'] ?? json['completedOrders']),
+      todayCompletedOrders: _asInt(json['todayCompletedOrders']),
+      rating: _asDouble(json['average_rating'] ?? json['rating']),
+      totalEarnings: _asInt(json['totalEarnings']),
+      totalKms: _asDouble(json['totalKms']),
+      lastActiveAt: DateTime.tryParse(json['lastActiveAt']?.toString() ?? ''),
+      joinedAt: DateTime.tryParse(json['joinedAt']?.toString() ?? ''),
       status: json['status'] ?? 'active',
       preferences: json['preferences'] as Map<String, dynamic>?,
       analytics: json['analytics'] as Map<String, dynamic>?,
     );
   }
+
+  static int _asInt(dynamic v) => v is num ? v.toInt() : int.tryParse(v?.toString() ?? '') ?? 0;
+  static double _asDouble(dynamic v) =>
+      v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0.0;
 
   Map<String, dynamic> toJson() {
     return {
@@ -200,125 +202,12 @@ class AuthProvider extends ChangeNotifier {
   Future<void> initializeAuth() async {
     _setLoading(true);
     try {
-      await checkBatteryOptimizationStatus();
-      if (!_isBatteryOptimizationIgnored) {
-        // Automatically request it for the "extreme experience"
-        await requestIgnoreBatteryOptimization();
-      }
-      
-      if (kDebugMode) {
-        print('Starting auth initialization...');
-      }
-
-      // Try to get saved credentials for this device from Firestore
-      final sessionInfo = await FirebaseService.getSavedCredentials();
-
-      if (sessionInfo != null) {
-        if (kDebugMode) {
-          print('Found saved credentials, attempting silent login...');
-        }
-
-        // Always start a new session silently using email + password
-        final authSuccess = await ApiService.authenticate(
-          sessionInfo['email'],
-          sessionInfo['password'],
-        );
-
-        if (authSuccess) {
-          if (kDebugMode) {
-            print('Auto-login successful!');
-          }
-
-          // Create rider from API session data
-          _rider = Rider(
-            id:
-                ApiService.userId ??
-                'rider_${DateTime.now().millisecondsSinceEpoch}',
-            name: ApiService.userName ?? 'Rider',
-            email: ApiService.userEmail ?? sessionInfo['email'],
-            phone: '', // Should be fetched from API
-            vehicleNumber: '', // Should be fetched from API
-            vehicleType: '', // Should be fetched from API
-            isOnline: false,
-          );
-
-          _isAuthenticated = true;
-
-          // Set user ID in OrderProvider for filtering
-          if (_orderProvider != null) {
-            _orderProvider!.setCurrentUserId(_rider!.id);
-          }
-
-          // Fetch and update rider statistics
-          await fetchRiderStatistics();
-
-          // Fetch user info for branch ids and save to users collection
-          await _fetchAndSaveUserInfo();
-
-          // Save rider data to Firebase with all fields
-          await FirebaseService.saveRiderData(
-            riderId: _rider!.id,
-            name: _rider!.name,
-            email: _rider!.email,
-            phone: _rider!.phone,
-            vehicleNumber: _rider!.vehicleNumber,
-            vehicleType: _rider!.vehicleType,
-            totalOrders: _rider!.totalOrders,
-            completedOrders: _rider!.completedOrders,
-            rating: _rider!.rating,
-            totalEarnings: _rider!.totalEarnings,
-            status: _rider!.status,
-            preferences: {
-              ...?_rider!.preferences,
-              'liveLocation': {
-                'lat': null,
-                'lng': null,
-                'updatedAt': null,
-                'orderId': null,
-              },
-            },
-          );
-
-          // Update FCM Token for push notifications
-          await FirebaseService.updateRiderFCMToken(_rider!.id);
-
-          // Create session record
-          _session = AuthSession(
-            sessionId: ApiService.sessionId ?? '',
-            riderId: _rider!.id,
-            createdAt: DateTime.now(),
-            expiresAt: DateTime.now().add(AppConfig.sessionTimeout),
-          );
-
-          // Update session in Firebase (always save session for auto-login)
-          FirebaseService.saveUserSession(
-            sessionId: _session!.sessionId,
-            userId: _rider!.id,
-            userEmail: _rider!.email,
-            userName: _rider!.name,
-            expiresAt: _session!.expiresAt!,
-            password: sessionInfo['password'],
-          );
-
-          // No local fallback caching (Firestore only as requested)
-
-          if (kDebugMode) {
-            print('Auto-login successful: ${_rider!.name}');
-          }
-        } else {
-          if (kDebugMode) {
-            print('Auto-login failed - API authentication unsuccessful');
-          }
-          // Authentication failed, clear saved credentials
-          _isAuthenticated = false;
-          _rider = null;
-          _session = null;
-        }
+      final creds = await _loadSavedCredentials();
+      if (creds != null && await ApiService.authenticate(creds.login, creds.password)) {
+        await _completeLogin(creds.login, creds.password);
+        if (kDebugMode) print('Auto-login successful: ${_rider!.name}');
       } else {
-        if (kDebugMode) {
-          print('No saved credentials found - user needs to login');
-        }
-        // No saved credentials
+        if (creds != null) await CredentialStore.clear();
         _isAuthenticated = false;
         _rider = null;
         _session = null;
@@ -328,13 +217,8 @@ class AuthProvider extends ChangeNotifier {
       _isAuthenticated = false;
       _rider = null;
       _session = null;
-
-      if (kDebugMode) {
-        print('Auth initialization error (continuing anyway): $e');
-      }
-      // Don't throw error - app should continue working even if auto-login fails
+      if (kDebugMode) print('Auth initialization error (continuing anyway): $e');
     } finally {
-      // Load clock in status from local storage
       try {
         final prefs = await SharedPreferences.getInstance();
         _isClockedIn = prefs.getBool('isClockedIn') ?? false;
@@ -346,14 +230,82 @@ class AuthProvider extends ChangeNotifier {
       } catch (e) {
         if (kDebugMode) print('Error loading clock-in state: $e');
       }
-
       _setLoading(false);
-      
-      // Check battery optimization status
-      await checkBatteryOptimizationStatus();
-      
-      notifyListeners();
+      // Battery-optimisation prompt must not delay the first screen.
+      unawaited(_ensureBatteryOptimizationIgnored());
     }
+  }
+
+  /// Saved login from the encrypted store. Builds before this release kept the
+  /// password in Firestore; read this device's copy once, move it into the
+  /// keystore, and the next session save removes it from Firestore.
+  Future<({String login, String password})?> _loadSavedCredentials() async {
+    final stored = await CredentialStore.read();
+    if (stored != null) return stored;
+    final legacy = await FirebaseService.getActiveSessionForCurrentDevice();
+    final login = legacy?['userEmail']?.toString();
+    final password = legacy?['password']?.toString();
+    if (login == null || login.isEmpty || password == null || password.isEmpty) return null;
+    await CredentialStore.save(login, password);
+    return (login: login, password: password);
+  }
+
+  /// Shared by manual and automatic login once Odoo accepted the credentials.
+  Future<void> _completeLogin(String login, String password) async {
+    _rider = Rider(
+      id: ApiService.userId ?? 'rider_${DateTime.now().millisecondsSinceEpoch}',
+      name: ApiService.userName ?? 'Rider',
+      email: ApiService.userEmail ?? login,
+      phone: '',
+      vehicleNumber: '',
+      vehicleType: '',
+      isOnline: false,
+    );
+    _isAuthenticated = true;
+    _orderProvider?.setCurrentUserId(_rider!.id);
+
+    _session = AuthSession(
+      sessionId: ApiService.sessionId ?? 'sess_${DateTime.now().millisecondsSinceEpoch}',
+      riderId: _rider!.id,
+      createdAt: DateTime.now(),
+      expiresAt: DateTime.now().add(AppConfig.sessionTimeout),
+    );
+
+    await CredentialStore.save(login, password);
+
+    // Profile + branch access are needed before orders load; fetch together.
+    await Future.wait([fetchRiderStatistics(), _fetchAndSaveUserInfo()]);
+
+    // Bookkeeping that the rider does not need to wait for.
+    unawaited(FirebaseService.saveRiderData(
+      riderId: _rider!.id,
+      name: _rider!.name,
+      email: _rider!.email,
+      phone: _rider!.phone,
+      vehicleNumber: _rider!.vehicleNumber,
+      vehicleType: _rider!.vehicleType,
+      completedOrders: _rider!.completedOrders,
+      rating: _rider!.rating,
+      status: _rider!.status,
+      preferences: {
+        ...?_rider!.preferences,
+        'liveLocation': {'lat': null, 'lng': null, 'updatedAt': null, 'orderId': null},
+      },
+    ));
+    unawaited(PushService.registerForRider(_rider!.id));
+    unawaited(FirebaseService.saveUserSession(
+      sessionId: _session!.sessionId,
+      userId: _rider!.id,
+      userEmail: _rider!.email,
+      userName: _rider!.name,
+      expiresAt: _session!.expiresAt!,
+    ));
+    notifyListeners();
+  }
+
+  Future<void> _ensureBatteryOptimizationIgnored() async {
+    await checkBatteryOptimizationStatus();
+    if (!_isBatteryOptimizationIgnored) await requestIgnoreBatteryOptimization();
   }
 
   // Check if battery optimization is ignored
@@ -397,89 +349,8 @@ class AuthProvider extends ChangeNotifier {
       // Authenticate with Odoo API
       final authSuccess = await ApiService.authenticate(email, password);
       if (authSuccess) {
-        // Create rider from API session data
-        _rider = Rider(
-          id:
-              ApiService.userId ??
-              'rider_${DateTime.now().millisecondsSinceEpoch}',
-          name: ApiService.userName ?? 'Rider',
-          email: ApiService.userEmail ?? email,
-          phone: '', // Should be fetched from API
-          vehicleNumber: '', // Should be fetched from API
-          vehicleType: '', // Should be fetched from API
-          isOnline: false,
-        );
-
-        _isAuthenticated = true;
-
-        // Set user ID in OrderProvider for filtering
-        if (_orderProvider != null) {
-          _orderProvider!.setCurrentUserId(_rider!.id);
-        }
-
-        // Fetch and update rider statistics
-        await fetchRiderStatistics();
-
-        // Fetch user info for branch ids and save to users collection
-        await _fetchAndSaveUserInfo();
-
-        // Save rider data to Firebase with all fields
-        await FirebaseService.saveRiderData(
-          riderId: _rider!.id,
-          name: _rider!.name,
-          email: _rider!.email,
-          phone: _rider!.phone,
-          vehicleNumber: _rider!.vehicleNumber,
-          vehicleType: _rider!.vehicleType,
-          totalOrders: _rider!.totalOrders,
-          completedOrders: _rider!.completedOrders,
-          rating: _rider!.rating,
-          totalEarnings: _rider!.totalEarnings,
-          status: _rider!.status,
-          preferences: {
-            ...?_rider!.preferences,
-            'liveLocation': {
-              'lat': null,
-              'lng': null,
-              'updatedAt': null,
-              'orderId': null,
-            },
-          },
-        );
-
-        // Update FCM Token for push notifications
-        await FirebaseService.updateRiderFCMToken(_rider!.id);
-
-        // Create session record
-        _session = AuthSession(
-          sessionId:
-              ApiService.sessionId ??
-              'sess_${DateTime.now().millisecondsSinceEpoch}',
-          riderId: _rider!.id,
-          createdAt: DateTime.now(),
-          expiresAt: DateTime.now().add(AppConfig.sessionTimeout),
-        );
-
-        // Clean up old sessions first
-        FirebaseService.cleanupOldSessions(_rider!.email);
-
-        // Always save session to Firebase for auto-login (store password for silent login)
-        FirebaseService.saveUserSession(
-          sessionId: _session!.sessionId,
-          userId: _rider!.id,
-          userEmail: _rider!.email,
-          userName: _rider!.name,
-          expiresAt: _session!.expiresAt!,
-          password: password,
-        );
-
-        // No local fallback caching (Firestore only as requested)
-
-        ErrorLogger.auth(
-          'Login successful: ${_rider!.name} (${_rider!.email})',
-        );
-
-        notifyListeners();
+        await _completeLogin(email, password);
+        ErrorLogger.auth('Login successful: ${_rider!.name} (${_rider!.email})');
         return true;
       } else {
         _error = 'Invalid email or password. Please check your credentials.';
@@ -558,18 +429,18 @@ class AuthProvider extends ChangeNotifier {
     _setLoading(true);
 
     try {
-      // Logout from API
+      // Stop pushes first: it needs the still-valid Odoo session.
+      await PushService.unregister(_rider?.id);
       await ApiService.logout();
+      await CredentialStore.clear();
+      _orderProvider?.reset();
 
-      // Clear session from Firebase
       if (_rider != null) {
         await FirebaseService.clearUserSession(_rider!.email);
       }
 
-      // Clear local storage (no remembered creds clearing here; password kept in Firestore only)
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('rider_data');
-      // No local fallback to clear
 
       // Reset state
       _rider = null;
@@ -673,21 +544,6 @@ class AuthProvider extends ChangeNotifier {
           lastActiveAt: DateTime.now(),
         );
 
-        // Optionally mirror to Firebase for web dashboard/live views
-        await FirebaseService.saveRiderData(
-          riderId: _rider!.id,
-          name: _rider!.name,
-          email: _rider!.email,
-          phone: _rider!.phone,
-          vehicleNumber: _rider!.vehicleNumber,
-          vehicleType: _rider!.vehicleType,
-          completedOrders: _rider!.completedOrders,
-          rating: _rider!.rating,
-        );
-
-        // Automatically refresh analytics whenever statistics are fetched
-        await fetchAnalytics();
-
         notifyListeners();
       }
     } catch (e) {
@@ -698,10 +554,9 @@ class AuthProvider extends ChangeNotifier {
 
     // Fetch today's stats and sync totalEarnings + totalKms + todayCompletedOrders into the rider model
     try {
-      final statsData = await ApiService.getTodayStats();
-      final resultData = statsData['result'] as Map<String, dynamic>? ?? {};
-      final earning = resultData['totalEarnings'] ?? resultData['rider_earning'] ?? resultData['total_earnings'];
-      final kms = resultData['totalKms'];
+      final resultData = await ApiService.getTodayStats();
+      final earning = resultData['unpaid_earnings'] ?? resultData['totalEarnings'];
+      final kms = resultData['unpaid_kms'] ?? resultData['totalKms'];
       final todayCount = resultData['today_delivered_orders_count'];
       if (_rider != null) {
         _rider = _rider!.copyWith(
@@ -779,11 +634,11 @@ class AuthProvider extends ChangeNotifier {
         }
 
         // Try to get saved credentials and re-authenticate
-        final savedCredentials = await FirebaseService.getSavedCredentials();
+        final savedCredentials = await CredentialStore.read();
         if (savedCredentials != null) {
           final authSuccess = await ApiService.authenticate(
-            savedCredentials['email'],
-            savedCredentials['password'],
+            savedCredentials.login,
+            savedCredentials.password,
           );
 
           if (authSuccess) {
@@ -802,7 +657,6 @@ class AuthProvider extends ChangeNotifier {
               userEmail: _rider?.email ?? '',
               userName: _rider?.name ?? '',
               expiresAt: _session!.expiresAt!,
-              password: savedCredentials['password'],
             );
 
             notifyListeners();
@@ -983,48 +837,59 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  /// Changes the password after Odoo verifies [oldPassword], then signs in
+  /// again with the new one so the rider stays logged in.
+  Future<PasswordChangeResult> changePassword(String oldPassword, String newPassword) async {
+    final result = await ApiService.changePassword(
+      oldPassword: oldPassword,
+      newPassword: newPassword,
+    );
+    if (!result.success) return result;
+
+    final login = _rider?.email ?? ApiService.userEmail ?? '';
+    if (login.isNotEmpty && await ApiService.authenticate(login, newPassword)) {
+      await CredentialStore.save(login, newPassword);
+      _session = AuthSession(
+        sessionId: ApiService.sessionId ?? _session?.sessionId ?? '',
+        riderId: _rider?.id ?? '',
+        createdAt: DateTime.now(),
+        expiresAt: DateTime.now().add(AppConfig.sessionTimeout),
+      );
+      unawaited(FirebaseService.saveUserSession(
+        sessionId: _session!.sessionId,
+        userId: _rider?.id ?? '',
+        userEmail: login,
+        userName: _rider?.name ?? '',
+        expiresAt: _session!.expiresAt!,
+      ));
+      notifyListeners();
+      return result;
+    }
+    // Password changed but re-login failed: the rider must sign in manually.
+    await logout();
+    return const PasswordChangeResult(true, 'Password changed. Please log in with your new password.',
+        code: 'relogin_required');
+  }
+
   // Fetch Rider Analytics
   Future<void> fetchAnalytics() async {
     if (_rider == null) return;
     try {
-      // 1. Try to get analytics from Odoo Profile
-      final profile = await ApiService.getUserProfile();
-
-      // 2. Get calculated analytics from Firestore
-      final firestoreStats = await FirebaseService.getRiderStatistics(
-        _rider!.id,
-      );
-
-      final Map<String, dynamic> analytics = {
-        'on_time_delivery':
-            (profile?['on_time_delivery'] != null &&
-                profile!['on_time_delivery'] > 0)
-            ? profile['on_time_delivery']
-            : firestoreStats['on_time_delivery'] ?? 0.0,
-
-        'average_delivery_time':
-            (profile?['average_delivery_time'] != null &&
-                profile!['average_delivery_time'] != 'N/A')
-            ? profile['average_delivery_time']
-            : firestoreStats['average_delivery_time'] ?? 'N/A',
-      };
+      // Timing analytics are derived from the rider's recent deliveries in Firestore.
+      final firestoreStats = await FirebaseService.getRiderStatistics(_rider!.id);
 
       _rider = _rider!.copyWith(
-        analytics: analytics,
-        completedOrders:
-            profile?['total_delivered_orders'] ??
-            firestoreStats['completedOrders'] ??
-            _rider!.completedOrders,
-        rating:
-            profile?['average_rating']?.toDouble() ??
-            firestoreStats['rating'] ??
-            _rider!.rating,
+        analytics: {
+          'on_time_delivery': firestoreStats['on_time_delivery'] ?? 0.0,
+          'average_delivery_time': firestoreStats['average_delivery_time'] ?? 'N/A',
+          'accepted_orders': firestoreStats['totalOrders'] ?? 0,
+        },
       );
 
       notifyListeners();
 
       if (kDebugMode) {
-        print('Analytics updated: $analytics');
+        print('Analytics updated: ${_rider!.analytics}');
       }
     } catch (e) {
       if (kDebugMode) {

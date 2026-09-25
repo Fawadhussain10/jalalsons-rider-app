@@ -11,6 +11,7 @@ import 'providers/auth_provider.dart';
 import 'providers/order_provider.dart';
 import 'utils/app_theme.dart';
 import 'services/firebase_service.dart';
+import 'services/push_service.dart';
 import 'services/data_sync_service.dart';
 import 'services/offline_service.dart';
 import 'config/app_config.dart';
@@ -51,6 +52,9 @@ void main() async {
   MapboxOptions.setAccessToken(AppConfig.mapboxAccessToken);
 
   runApp(const JSRiderApp());
+
+  // Notification permission + channels; not needed for the first frame.
+  PushService.initialize();
 }
 
 class JSRiderApp extends StatelessWidget {

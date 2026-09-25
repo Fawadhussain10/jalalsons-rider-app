@@ -3,7 +3,16 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/order_provider.dart';
+import '../utils/app_colors.dart';
+import '../utils/time_utils.dart';
+import '../widgets/ui_kit.dart';
+import 'orders_screen.dart' show showOrderDetails;
 
+/// Cash & earnings for the current day (local midnight → now).
+///
+/// Server figures come from /api/rider/today-stats. The live order feed gives
+/// instant numbers too, so the screen is correct even before the server answers
+/// and refreshes itself whenever a delivery is completed.
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
 
@@ -12,206 +21,193 @@ class EarningsScreen extends StatefulWidget {
 }
 
 class _EarningsScreenState extends State<EarningsScreen> {
-  Map<String, dynamic> _earningsData = {};
-  bool _isLoading = false;
+  Map<String, dynamic> _stats = {};
+  bool _loading = false;
+  DateTime? _updatedAt;
+  int _lastDeliveredCount = -1;
 
   @override
   void initState() {
     super.initState();
-    _loadEarnings();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  Future<void> _loadEarnings() async {
-    setState(() => _isLoading = true);
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final data = await authProvider.getTodayStats();
-    if (mounted) {
-      setState(() {
-        _earningsData = data;
-        _isLoading = false;
-      });
-    }
+  Future<void> _load() async {
+    if (_loading) return;
+    setState(() => _loading = true);
+    final data = await context.read<AuthProvider>().getTodayStats();
+    if (!mounted) return;
+    setState(() {
+      if (data.isNotEmpty) {
+        _stats = data;
+        _updatedAt = DateTime.now();
+      }
+      _loading = false;
+    });
+  }
+
+  double _num(String key, double fallback) {
+    final v = _stats[key];
+    return v is num ? v.toDouble() : fallback;
   }
 
   @override
   Widget build(BuildContext context) {
-    final resultData    = _earningsData['result'] as Map<String, dynamic>? ?? {};
-    final orderCount    = resultData['today_delivered_orders_count'] ?? 0;
-    final riderEarning  = (resultData['totalEarnings'] ?? 0.0).toDouble();
-    final cashInHand    = (resultData['today_delivered_orders_total_amount'] ?? 0.0).toDouble();
-    final totalKms      = (resultData['totalKms'] ?? 0.0).toDouble();
-    final avgRating     = (resultData['average_rating'] ?? 0.0).toDouble();
+    final orders = context.watch<OrderProvider>();
+    final rider = context.watch<AuthProvider>().currentRider;
 
-    final fmt  = NumberFormat('#,##0.00');
-    final fmtK = NumberFormat('#,##0.0');
+    final deliveredToday = orders.deliveredToday;
+    // A new delivery changes cash, KMs and payout: fetch fresh server figures.
+    if (_lastDeliveredCount != -1 && deliveredToday.length != _lastDeliveredCount) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    }
+    _lastDeliveredCount = deliveredToday.length;
+    final cash = _num('today_cash_collected', orders.totalCashToCollect);
+    final deliveredCount = _num('today_delivered_orders_count', deliveredToday.length.toDouble()).toInt();
+    final codCount = _num('today_cod_orders_count', orders.codOrders.length.toDouble()).toInt();
+    final kmsToday = _num('today_kms', orders.kmsToday);
+    final earningsToday = _num('today_earnings', 0);
+    final unpaidEarnings = _num('unpaid_earnings', (rider?.totalEarnings ?? 0).toDouble());
+    final unpaidKms = _num('unpaid_kms', rider?.totalKms ?? 0);
+    final rating = _num('average_rating', rider?.rating ?? 0);
+    final dateLabel = DateFormat('EEEE, d MMMM').format(DateTime.now());
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cash & Earnings'),
-        centerTitle: true,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadEarnings,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-
-                    // ── Hero: Rider Earning ──────────────────────────────
-                    _HeroCard(
-                      icon: Icons.payments_rounded,
-                      label: 'Rider Earning',
-                      value: 'Rs ${fmt.format(riderEarning)}',
-                    ),
-                    const SizedBox(height: 14),
-
-                    // ── Row: Cash in Hand | Orders Completed ─────────────
-                    IntrinsicHeight(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(
-                            child: _StatCard(
-                              icon: Icons.account_balance_wallet_rounded,
-                              iconColor: Colors.orange.shade700,
-                              bgColor: Colors.orange.shade50,
-                              borderColor: Colors.orange.shade300,
-                              label: 'Cash in Hand',
-                              value: 'Rs ${fmt.format(cashInHand)}',
-                              subtitle: 'Collected today',
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _StatCard(
-                              icon: Icons.check_circle_rounded,
-                              iconColor: Colors.green.shade700,
-                              bgColor: Colors.green.shade50,
-                              borderColor: Colors.green.shade300,
-                              label: 'Orders Completed',
-                              value: '$orderCount',
-                              subtitle: 'Delivered today',
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-
-                    // ── Row: Total KMs | Avg Rating ──────────────────────
-                    IntrinsicHeight(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(
-                            child: _StatCard(
-                              icon: Icons.route_rounded,
-                              iconColor: Colors.blue.shade700,
-                              bgColor: Colors.blue.shade50,
-                              borderColor: Colors.blue.shade300,
-                              label: 'Total KMs',
-                              value: '${fmtK.format(totalKms)} km',
-                              subtitle: 'Distance today',
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _StatCard(
-                              icon: Icons.star_rounded,
-                              iconColor: Colors.amber.shade700,
-                              bgColor: Colors.amber.shade50,
-                              borderColor: Colors.amber.shade300,
-                              label: 'Avg Rating',
-                              value: fmtK.format(avgRating),
-                              subtitle: 'Customer rating',
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Hero gradient card (used for the primary metric)
-// ─────────────────────────────────────────────────────────────────────────────
-class _HeroCard extends StatelessWidget {
-  const _HeroCard({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.subtitle,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-  final String? subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    return Card(
-      elevation: 6,
-      shadowColor: primary.withOpacity(0.4),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: LinearGradient(
-            colors: [primary, primary.withOpacity(0.75)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
-        child: Column(
+      body: RefreshIndicator(
+        color: AppColors.primary,
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, color: Colors.white.withOpacity(0.9), size: 26),
-                const SizedBox(width: 10),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.95),
-                    fontWeight: FontWeight.w600,
-                    fontSize: 17,
+            InkHero(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text('Cash & Earnings',
+                          style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+                      const Spacer(),
+                      if (_loading)
+                        const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                    ],
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 38,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-                letterSpacing: 0.5,
+                  const SizedBox(height: 4),
+                  Text(dateLabel, style: TextStyle(color: Colors.white.withValues(alpha: 0.6))),
+                  const SizedBox(height: 22),
+                  Text('Cash to hand over',
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Text(formatRs(cash),
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 40, fontWeight: FontWeight.w800, letterSpacing: -1.2)),
+                  const SizedBox(height: 8),
+                  Text(
+                    '$codCount cash-on-delivery order${codCount == 1 ? '' : 's'} today · online payments excluded',
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 12.5),
+                  ),
+                ],
               ),
             ),
-            if (subtitle != null && subtitle!.isNotEmpty) ...
-              [
-                const SizedBox(height: 8),
-                Text(
-                  subtitle!,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.6),
-                    fontSize: 11,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 1.45,
+                    children: [
+                      _MetricTile(
+                        icon: Icons.task_alt_rounded,
+                        color: AppColors.success,
+                        label: 'Delivered today',
+                        value: '$deliveredCount',
+                      ),
+                      _MetricTile(
+                        icon: Icons.route_rounded,
+                        color: AppColors.info,
+                        label: 'KMs today',
+                        value: '${kmsToday.toStringAsFixed(1)} km',
+                      ),
+                      _MetricTile(
+                        icon: Icons.account_balance_wallet_rounded,
+                        color: AppColors.purple,
+                        label: 'Earned today',
+                        value: formatRs(earningsToday),
+                      ),
+                      _MetricTile(
+                        icon: Icons.star_rounded,
+                        color: AppColors.gold,
+                        label: 'Rating',
+                        value: rating > 0 ? rating.toStringAsFixed(1) : '—',
+                      ),
+                    ],
                   ),
-                ),
-              ],
+                  const SizedBox(height: 16),
+                  PremiumCard(
+                    child: Row(
+                      children: [
+                        const IconBadge(icon: Icons.savings_rounded, color: AppColors.primary, size: 46),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Pending payout',
+                                  style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                              const SizedBox(height: 2),
+                              Text(formatRs(unpaidEarnings),
+                                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                              Text('${unpaidKms.toStringAsFixed(1)} km not yet paid by the office',
+                                  style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SectionTitle(
+                    "Today's deliveries",
+                    trailing: _updatedAt == null
+                        ? null
+                        : Text('Updated ${TimeUtils.timeOfDay(_updatedAt!)}',
+                            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                  ),
+                  if (deliveredToday.isEmpty)
+                    const PremiumCard(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 18),
+                        child: Center(
+                          child: Text('No deliveries yet today',
+                              style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    )
+                  else
+                    PremiumCard(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Column(
+                        children: [
+                          for (var i = 0; i < deliveredToday.length; i++) ...[
+                            if (i > 0) const Divider(indent: 16, endIndent: 16),
+                            _DeliveryRow(order: deliveredToday[i]),
+                          ],
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -219,91 +215,74 @@ class _HeroCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Compact stat card (used for secondary metrics)
-// ─────────────────────────────────────────────────────────────────────────────
-class _StatCard extends StatelessWidget {
-  const _StatCard({
-    required this.icon,
-    required this.iconColor,
-    required this.bgColor,
-    required this.borderColor,
-    required this.label,
-    required this.value,
-    required this.subtitle,
-    this.fullWidth = false,
-  });
-
+class _MetricTile extends StatelessWidget {
+  const _MetricTile({required this.icon, required this.color, required this.label, required this.value});
   final IconData icon;
-  final Color iconColor;
-  final Color bgColor;
-  final Color borderColor;
+  final Color color;
   final String label;
   final String value;
-  final String subtitle;
-  final bool fullWidth;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 2,
-      color: bgColor,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: borderColor, width: 1.5),
-      ),
-      child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: 18,
-          vertical: fullWidth ? 18 : 20,
-        ),
-        child: fullWidth
-            ? Row(
-                children: [
-                  _IconBubble(icon: icon, iconColor: iconColor, bgColor: borderColor.withOpacity(0.25)),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(label, style: TextStyle(color: iconColor.withOpacity(0.8), fontSize: 12, fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 2),
-                        Text(value, style: TextStyle(color: iconColor, fontSize: 24, fontWeight: FontWeight.bold)),
-                        Text(subtitle, style: TextStyle(color: iconColor.withOpacity(0.6), fontSize: 11)),
-                      ],
-                    ),
-                  ),
-                ],
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _IconBubble(icon: icon, iconColor: iconColor, bgColor: borderColor.withOpacity(0.25)),
-                  const SizedBox(height: 12),
-                  Text(label, style: TextStyle(color: iconColor.withOpacity(0.8), fontSize: 12, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 4),
-                  Text(value, style: TextStyle(color: iconColor, fontSize: 22, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 2),
-                  Text(subtitle, style: TextStyle(color: iconColor.withOpacity(0.6), fontSize: 11)),
-                ],
-              ),
+    return PremiumCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          IconBadge(icon: icon, color: color, size: 36),
+          const Spacer(),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, letterSpacing: -0.4)),
+          ),
+          Text(label, style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary)),
+        ],
       ),
     );
   }
 }
 
-class _IconBubble extends StatelessWidget {
-  const _IconBubble({required this.icon, required this.iconColor, required this.bgColor});
-  final IconData icon;
-  final Color iconColor;
-  final Color bgColor;
+class _DeliveryRow extends StatelessWidget {
+  const _DeliveryRow({required this.order});
+  final Order order;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
-      child: Icon(icon, color: iconColor, size: 22),
+    return InkWell(
+      onTap: () => showOrderDetails(context, order),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('#${order.reference}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${order.customerName} · ${order.deliveredAt != null ? TimeUtils.timeOfDay(order.deliveredAt!) : ''}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(formatRs(order.amount), style: const TextStyle(fontWeight: FontWeight.w800)),
+                const SizedBox(height: 4),
+                order.isCashOnDelivery
+                    ? const StatusChip(label: 'CASH', color: Color(0xFFB45309))
+                    : const StatusChip(label: 'PAID', color: AppColors.success),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
