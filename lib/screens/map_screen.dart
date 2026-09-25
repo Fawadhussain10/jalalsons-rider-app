@@ -98,6 +98,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   int _stepIndex = 1;
   double? _distanceToManeuver;
   Map<String, dynamic>? _lastRouteFeatureCollection;
+  // Trip panel: open before the ride, folded into a corner pill while navigating.
+  bool _panelExpanded = true;
 
   final String _routeSourceId = 'route_source_jsr';
   final String _routeLineLayerId = 'route_line_jsr';
@@ -142,15 +144,23 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     // Higher speed -> Lower zoom (see more), Higher pitch (see further ahead)
     // Lower speed -> Higher zoom (detail), Medium pitch (comfortable view)
     final sp = speedMps.clamp(0.0, 20.0); // max 72km/h for scaling
-    final zoom = 18.5 - (sp / 20.0) * 3.5; // 18.5 (slow) -> 15.0 (fast)
-    final pitch = 45.0 + (sp / 20.0) * 25.0; // 45 (slow) -> 70 (fast)
-    
+    final zoom = 17.2 - (sp / 20.0) * 1.8; // 17.2 (slow) -> 15.4 (fast): streets, not rooftops
+    final pitch = 50.0 + (sp / 20.0) * 10.0; // 50 (slow) -> 60 (fast)
+
     return CameraOptions(
-      center: center, 
-      bearing: bearing, 
-      zoom: zoom, 
+      center: center,
+      bearing: bearing,
+      zoom: zoom,
       pitch: pitch,
+      padding: _navCameraPadding,
     );
+  }
+
+  /// Puts the rider in the lower part of the screen (above the folded panel)
+  /// so most of the view shows the road ahead.
+  MbxEdgeInsets get _navCameraPadding {
+    final h = MediaQuery.of(context).size.height;
+    return MbxEdgeInsets(top: h * 0.42, left: 0, bottom: _panelExpanded ? h * 0.30 : 0, right: 0);
   }
 
   @override
@@ -204,6 +214,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         puckBearing: PuckBearing.HEADING,
       ),
     );
+
+    // No distance scale over the navigation view.
+    try {
+      await _mapController.scaleBar.updateSettings(ScaleBarSettings(enabled: false));
+    } catch (_) {}
 
     // Optimize map performance settings
     await _optimizeMapPerformance();
@@ -633,9 +648,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       await _mapController.flyTo(
         CameraOptions(
           center: Point(coordinates: Position(pos.longitude, pos.latitude)),
-          zoom: 18.0,
-          pitch: 60.0,
+          zoom: 17.2,
+          pitch: 55.0,
           bearing: pos.heading,
+          padding: _navCameraPadding,
         ),
         MapAnimationOptions(duration: 800),
       );
@@ -646,6 +662,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     setState(() {
       _isNavigating = true;
       _followRider = true;
+      _panelExpanded = false; // give the map the screen while riding
     });
 
     final pos = _currentPosition ?? await geo.Geolocator.getCurrentPosition(
@@ -668,7 +685,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     final end = '${widget.order.deliveryLongitude},${widget.order.deliveryLatitude}';
 
     final url = Uri.parse(
-        'https://api.mapbox.com/directions/v5/mapbox/driving/$start;$end?geometries=geojson&overview=simplified&alternatives=false&steps=true&access_token=${AppConfig.mapboxAccessToken}');
+        'https://api.mapbox.com/directions/v5/mapbox/driving/$start;$end?geometries=geojson&overview=full&alternatives=false&steps=true&access_token=${AppConfig.mapboxAccessToken}');
 
     try {
       final response = await http.get(url).timeout(const Duration(seconds: 5));
@@ -756,10 +773,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       if (_routePoints.isNotEmpty && _followRider) {
         await _mapController.flyTo(
           CameraOptions(
-            center: _routePoints.first, 
-            zoom: 18.0,
-            pitch: 65.0,
+            center: _routePoints.first,
+            zoom: 17.2,
+            pitch: 55.0,
             bearing: startPos.heading,
+            padding: _navCameraPadding,
           ),
           MapAnimationOptions(duration: 1200),
         );
@@ -1207,12 +1225,30 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               child: SlideTransition(position: _slideAnimation, child: _buildMapControls()),
             ),
 
-            // Bottom: trip panel
+            // Bottom: trip panel, or folded into a corner pill while riding.
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
-              child: SlideTransition(position: _slideAnimation, child: _buildTripPanel(pad.bottom)),
+              child: SlideTransition(
+                position: _slideAnimation,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 280),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, anim) => FadeTransition(
+                    opacity: anim,
+                    child: ScaleTransition(
+                      scale: Tween(begin: 0.92, end: 1.0).animate(anim),
+                      alignment: Alignment.bottomLeft,
+                      child: child,
+                    ),
+                  ),
+                  child: _panelExpanded
+                      ? KeyedSubtree(key: const ValueKey('panel'), child: _buildTripPanel(pad.bottom))
+                      : KeyedSubtree(key: const ValueKey('folded'), child: _buildFoldedBar(pad.bottom)),
+                ),
+              ),
             ),
           ],
         ),
@@ -1371,6 +1407,39 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     );
   }
 
+  /// Folded state: a pill in the bottom-left corner (tap or swipe up to open) and,
+  /// once inside the 400 m zone, a Delivered button on the right.
+  Widget _buildFoldedBar(double bottomInset) {
+    final title = _navDurationSeconds != null
+        ? _formatDuration(_navDurationSeconds!)
+        : (_distanceMeters != null ? _formatDistance(_distanceMeters!) : 'Trip');
+    final subtitle = _navDurationSeconds != null
+        ? '${_navDistanceMeters != null ? _formatDistance(_navDistanceMeters!) : ''} · $_etaClock'
+        : 'Tap for details';
+    return Padding(
+      padding: EdgeInsets.fromLTRB(14, 0, 14, bottomInset + 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _FoldedPill(title: title, subtitle: subtitle, onTap: () => setState(() => _panelExpanded = true)),
+          const Spacer(),
+          if (_canDeliver)
+            FilledButton.icon(
+              onPressed: _onDelivered,
+              style: FilledButton.styleFrom(
+                minimumSize: const ui.Size(0, 56),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                shape: const StadiumBorder(),
+                elevation: 6,
+              ),
+              icon: const Icon(Icons.photo_camera_rounded),
+              label: const Text('Delivered'),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTripPanel(double bottomInset) {
     final order = _typedOrder;
     final name = (widget.order.customerName ?? 'Customer').toString();
@@ -1382,7 +1451,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     final progress = away == null ? 0.0 : (1 - ((away - 400) / 3000)).clamp(0.0, 1.0);
 
     return Container(
-      padding: EdgeInsets.fromLTRB(18, 10, 18, bottomInset + 16),
+      padding: EdgeInsets.fromLTRB(18, 4, 18, bottomInset + 16),
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
@@ -1392,14 +1461,32 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4)),
+          // Handle + fold button; a downward swipe folds the panel too.
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _panelExpanded = false),
+            onVerticalDragEnd: (d) {
+              if ((d.primaryVelocity ?? 0) > 150) setState(() => _panelExpanded = false);
+            },
+            child: SizedBox(
+              height: 30,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4)),
+                  ),
+                  const Positioned(
+                    right: 0,
+                    child: Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.textSecondary, size: 28),
+                  ),
+                ],
+              ),
             ),
           ),
+          const SizedBox(height: 6),
 
           // Trip summary
           Row(
@@ -1423,13 +1510,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   ],
                 ),
               ),
-              _canDeliver
-                  ? const StatusChip(label: 'IN DELIVERY ZONE', color: AppColors.success, icon: Icons.verified_rounded)
-                  : StatusChip(
-                      label: away == null ? 'LOCATING' : '${_formatDistance(away)} AWAY',
-                      color: AppColors.warning,
-                      icon: Icons.near_me_rounded,
-                    ),
+              if (_canDeliver)
+                const StatusChip(label: 'IN DELIVERY ZONE', color: AppColors.success, icon: Icons.verified_rounded)
+              else if (!_isNavigating)
+                StatusChip(
+                  label: away == null ? 'LOCATING' : '${_formatDistance(away)} AWAY',
+                  color: AppColors.warning,
+                  icon: Icons.near_me_rounded,
+                ),
             ],
           ),
           const SizedBox(height: 12),
@@ -1534,6 +1622,53 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _FoldedPill extends StatelessWidget {
+  const _FoldedPill({required this.title, required this.subtitle, required this.onTap});
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      onVerticalDragEnd: (d) {
+        if ((d.primaryVelocity ?? 0) < -150) onTap(); // swipe up opens it
+      },
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(8, 8, 16, 8),
+        decoration: BoxDecoration(
+          gradient: AppColors.inkGradient,
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: const [BoxShadow(color: Color(0x4D000000), blurRadius: 18, offset: Offset(0, 8))],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: const BoxDecoration(gradient: AppColors.primaryGradient, shape: BoxShape.circle),
+              child: const Icon(Icons.keyboard_arrow_up_rounded, color: Colors.white, size: 28),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800, height: 1.1)),
+                Text(subtitle,
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.65), fontSize: 12, fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
