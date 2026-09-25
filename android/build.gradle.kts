@@ -50,6 +50,19 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Google Play requires 16 KB memory-page support. Mapbox ships the same SDK version
+// built for it as "-ndk27" artifacts; use those instead of the ones the
+// mapbox_maps_flutter plugin asks for.
+subprojects {
+    configurations.all {
+        resolutionStrategy.dependencySubstitution {
+            substitute(module("com.mapbox.maps:android"))
+                .using(module("com.mapbox.maps:android-ndk27:11.15.0"))
+                .because("16 KB page size support required by Google Play")
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
