@@ -40,6 +40,34 @@ void main() {
     await _font('MaterialIcons', ['MaterialIcons-Regular.otf']);
   });
 
+  testWidgets('limit preview', (tester) async {
+    tester.view.physicalSize = const Size(351 * 2, 330 * 2);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+    final now = DateTime.now().toUtc().toIso8601String();
+    Map<String, dynamic> ongoing(int id) => {
+          'id': id, 'reference': '$id', 'status': 'accepted', 'live_on_app': true, 'createdAt': now,
+          'branch': {'id': 1}, 'stateTrail': {'draft': {'at': now}, 'accepted': {'at': now, 'by': 7}},
+        };
+    final provider = OrderProvider()..debugLoadSnapshot([ongoing(1), ongoing(2)], riderId: '7');
+    await tester.pumpWidget(ChangeNotifierProvider.value(
+      value: provider,
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.lightTheme.copyWith(textTheme: AppTheme.lightTheme.textTheme.apply(fontFamily: 'Roboto')),
+        home: Scaffold(
+          backgroundColor: AppColors.canvas,
+          body: ListView(padding: const EdgeInsets.all(16), children: [
+            OrderCard(order: _order(31826001, 'Ali Raza', status: 'draft'), mode: 'upcoming'),
+          ]),
+        ),
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await expectLater(find.byType(MaterialApp), matchesGoldenFile('card_limit.png'));
+  });
+
   testWidgets('preview', (tester) async {
     tester.view.physicalSize = const Size(351 * 2, 1180 * 2);
     tester.view.devicePixelRatio = 2;

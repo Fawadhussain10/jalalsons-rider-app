@@ -46,6 +46,8 @@ class AppConfig {
   
   // Data Fetching Rules
   static const int orderSearchLimit = 50;
+  // A rider can carry at most this many undelivered (ongoing) orders at once.
+  static const int maxOngoingOrders = 2;
   static const int maxRealisticDeliveryMinutes = 1440; // 24 hours
 
   // Mapbox Configuration

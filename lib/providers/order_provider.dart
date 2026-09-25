@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
 import '../services/firebase_service.dart';
+import '../config/app_config.dart';
 import '../utils/time_utils.dart';
 
 enum OrderStatus {
@@ -290,6 +291,13 @@ class OrderProvider extends ChangeNotifier {
   String get query => _query;
   bool isBusy(String orderId) => _busyOrderIds.contains(orderId);
 
+  /// True while the rider already carries the maximum number of undelivered orders.
+  bool get atOrderLimit => _acceptedOrders.length >= AppConfig.maxOngoingOrders;
+
+  static const String orderLimitMessage =
+      'You already have ${AppConfig.maxOngoingOrders} orders on the way. '
+      'Deliver one of them before accepting another.';
+
   /// Deliveries this rider completed since local midnight.
   List<Order> get deliveredToday => _deliveredToday;
 
@@ -379,6 +387,14 @@ class OrderProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Feeds order documents as if they came from Firestore (tests only).
+  @visibleForTesting
+  void debugLoadSnapshot(List<Map<String, dynamic>> docs, {required String riderId}) {
+    _currentUserId = riderId;
+    _lastSnapshot = docs;
+    _rebuild();
+  }
+
   /// Splits Firestore order documents into the three tabs (pure; unit-tested).
   @visibleForTesting
   static ({
@@ -449,6 +465,12 @@ class OrderProvider extends ChangeNotifier {
   Future<bool> acceptOrder(String orderId, [String? _]) async {
     if (_currentUserId == null) {
       _error = 'User not authenticated';
+      return false;
+    }
+    // Counts undelivered orders already accepted, plus any accept still in flight.
+    if (_acceptedOrders.length + _busyOrderIds.length >= AppConfig.maxOngoingOrders) {
+      _error = orderLimitMessage;
+      notifyListeners();
       return false;
     }
     if (!_busyOrderIds.add(orderId)) return false;

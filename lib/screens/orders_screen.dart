@@ -576,6 +576,8 @@ class _AcceptButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final busy = context.select<OrderProvider, bool>((p) => p.isBusy(order.id));
+    final locked = context.select<OrderProvider, bool>((p) => p.atOrderLimit) && !busy;
+    if (locked) return const _OrderLimitNotice();
     return FilledButton.icon(
       onPressed: busy ? null : () => confirmAccept(context, order),
       style: FilledButton.styleFrom(
@@ -586,6 +588,36 @@ class _AcceptButton extends StatelessWidget {
           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
           : const Icon(Icons.check_rounded, size: 18),
       label: Text(busy ? 'Accepting…' : 'Accept Order'),
+    );
+  }
+}
+
+/// Shown instead of Accept while the rider already has the maximum orders on the way.
+class _OrderLimitNotice extends StatelessWidget {
+  const _OrderLimitNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 48),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.warningSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.35)),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.lock_clock_rounded, size: 20, color: Color(0xFFB45309)),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '${AppConfig.maxOngoingOrders} orders on the way · deliver one to accept more',
+              style: TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF92400E), height: 1.3),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -642,6 +674,13 @@ class _OngoingAction extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 Future<void> confirmAccept(BuildContext context, Order order) async {
+  if (context.read<OrderProvider>().atOrderLimit) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text(OrderProvider.orderLimitMessage),
+      backgroundColor: AppColors.warning,
+    ));
+    return;
+  }
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -871,6 +910,8 @@ class _AcceptButtonLarge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final busy = context.select<OrderProvider, bool>((p) => p.isBusy(order.id));
+    final locked = context.select<OrderProvider, bool>((p) => p.atOrderLimit) && !busy;
+    if (locked) return const _OrderLimitNotice();
     return FilledButton.icon(
       onPressed: busy
           ? null

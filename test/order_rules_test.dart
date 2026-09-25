@@ -193,4 +193,43 @@ void main() {
       expect(matches('nobody'), isFalse);
     });
   });
+
+  group('Ongoing order limit (max 2)', () {
+    Map<String, dynamic> ongoing(int id) => doc(
+        id: id, placedLocal: today, acceptedBy: me, acceptedLocal: today, status: 'accepted');
+
+    test('one ongoing order: can still accept', () {
+      final p = OrderProvider()..debugLoadSnapshot([ongoing(40), doc(id: 41, placedLocal: today)], riderId: '$me');
+      expect(p.atOrderLimit, isFalse);
+    });
+
+    test('two ongoing orders: third accept is refused without calling the server', () async {
+      final p = OrderProvider()
+        ..debugLoadSnapshot([ongoing(42), ongoing(43), doc(id: 44, placedLocal: today)], riderId: '$me');
+      expect(p.atOrderLimit, isTrue);
+      final ok = await p.acceptOrder('44');
+      expect(ok, isFalse);
+      expect(p.error, OrderProvider.orderLimitMessage);
+    });
+
+    test('delivering one of them frees a slot again', () {
+      final p = OrderProvider()
+        ..debugLoadSnapshot([
+          ongoing(45),
+          doc(id: 46, placedLocal: today, acceptedBy: me, deliveredBy: me, acceptedLocal: today,
+              deliveredLocal: today.add(const Duration(minutes: 30)), status: 'delivered'),
+        ], riderId: '$me');
+      expect(p.atOrderLimit, isFalse);
+    });
+
+    test("other riders' orders don't count", () {
+      final p = OrderProvider()
+        ..debugLoadSnapshot([
+          doc(id: 47, placedLocal: today, acceptedBy: 99, acceptedLocal: today, status: 'accepted'),
+          doc(id: 48, placedLocal: today, acceptedBy: 99, acceptedLocal: today, status: 'accepted'),
+          ongoing(49),
+        ], riderId: '$me');
+      expect(p.atOrderLimit, isFalse);
+    });
+  });
 }
