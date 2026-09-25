@@ -65,8 +65,12 @@ workflows:
 
       - name: Flutter build (no code signing)
         script: |
+          # Version string comes from pubspec.yaml (e.g. 1.1.0); the build number is
+          # Codemagic's counter, so every upload to App Store Connect is unique.
+          BUILD_NAME=$(grep '^version:' pubspec.yaml | sed -E 's/version: *([0-9.]+).*/\1/')
+          echo "Building $BUILD_NAME ($PROJECT_BUILD_NUMBER)"
           flutter build ios --release --no-codesign \
-            --build-name=1.0.0 \
+            --build-name=$BUILD_NAME \
             --build-number=$PROJECT_BUILD_NUMBER \
             --dart-define=MAPBOX_TOKEN=$MAPBOX_TOKEN
 
