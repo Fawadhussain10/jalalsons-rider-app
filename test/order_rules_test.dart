@@ -199,13 +199,13 @@ void main() {
         id: id, placedLocal: today, acceptedBy: me, acceptedLocal: today, status: 'accepted');
 
     test('one ongoing order: can still accept', () {
-      final p = OrderProvider()..debugLoadSnapshot([ongoing(40), doc(id: 41, placedLocal: today)], riderId: '$me');
+      final p = OrderProvider()..debugLoadSnapshot([ongoing(40), doc(id: 41, placedLocal: today)], riderId: '$me', now: now);
       expect(p.atOrderLimit, isFalse);
     });
 
     test('two ongoing orders: third accept is refused without calling the server', () async {
       final p = OrderProvider()
-        ..debugLoadSnapshot([ongoing(42), ongoing(43), doc(id: 44, placedLocal: today)], riderId: '$me');
+        ..debugLoadSnapshot([ongoing(42), ongoing(43), doc(id: 44, placedLocal: today)], riderId: '$me', now: now);
       expect(p.atOrderLimit, isTrue);
       final ok = await p.acceptOrder('44');
       expect(ok, isFalse);
@@ -218,7 +218,7 @@ void main() {
           ongoing(45),
           doc(id: 46, placedLocal: today, acceptedBy: me, deliveredBy: me, acceptedLocal: today,
               deliveredLocal: today.add(const Duration(minutes: 30)), status: 'delivered'),
-        ], riderId: '$me');
+        ], riderId: '$me', now: now);
       expect(p.atOrderLimit, isFalse);
     });
 
@@ -228,7 +228,7 @@ void main() {
           doc(id: 47, placedLocal: today, acceptedBy: 99, acceptedLocal: today, status: 'accepted'),
           doc(id: 48, placedLocal: today, acceptedBy: 99, acceptedLocal: today, status: 'accepted'),
           ongoing(49),
-        ], riderId: '$me');
+        ], riderId: '$me', now: now);
       expect(p.atOrderLimit, isFalse);
     });
   });

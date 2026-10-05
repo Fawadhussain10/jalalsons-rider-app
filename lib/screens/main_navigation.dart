@@ -8,6 +8,9 @@ import 'earnings_screen.dart';
 import '../config/app_config.dart';
 import '../services/push_service.dart';
 import '../utils/app_colors.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
+import 'login_screen.dart';
 
 class TabNavigationNotification extends Notification {
   final int index;
@@ -24,6 +27,7 @@ class MainNavigation extends StatefulWidget {
 class _MainNavigationState extends State<MainNavigation> {
   int _currentIndex = 0;
   StreamSubscription<Map<String, dynamic>>? _pushTaps;
+  bool _leaving = false;
 
   // Built once and kept alive by the IndexedStack: switching tabs never
   // re-runs network calls or loses scroll position.
@@ -59,6 +63,18 @@ class _MainNavigationState extends State<MainNavigation> {
 
   @override
   Widget build(BuildContext context) {
+    // Signed out underneath us (password changed by the office): show login.
+    final signedIn = context.select<AuthProvider, bool>((a) => a.isAuthenticated);
+    if (!signedIn && !_leaving) {
+      _leaving = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (_) => false,
+        );
+      });
+    }
     return AnnotatedRegion<SystemUiOverlayStyle>(
       // Light status-bar icons over the dark headers.
       value: SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent),

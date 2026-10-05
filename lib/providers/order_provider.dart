@@ -379,6 +379,7 @@ class OrderProvider extends ChangeNotifier {
       _lastSnapshot,
       riderId: int.tryParse(_currentUserId ?? ''),
       allowedBranchIds: _allowedBranchIds,
+      now: _debugNow,
     );
     _availableOrders = buckets.available;
     _acceptedOrders = buckets.accepted;
@@ -389,11 +390,14 @@ class OrderProvider extends ChangeNotifier {
 
   /// Feeds order documents as if they came from Firestore (tests only).
   @visibleForTesting
-  void debugLoadSnapshot(List<Map<String, dynamic>> docs, {required String riderId}) {
+  void debugLoadSnapshot(List<Map<String, dynamic>> docs, {required String riderId, DateTime? now}) {
     _currentUserId = riderId;
     _lastSnapshot = docs;
+    _debugNow = now;
     _rebuild();
   }
+
+  DateTime? _debugNow;
 
   /// Splits Firestore order documents into the three tabs (pure; unit-tested).
   @visibleForTesting
