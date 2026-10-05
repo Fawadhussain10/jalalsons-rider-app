@@ -123,7 +123,11 @@ class Order {
   factory Order.fromJson(Map<String, dynamic> json) {
     final customer = json['customer'] is Map ? Map<String, dynamic>.from(json['customer']) : null;
     final address = customer?['address'] is Map ? customer!['address'] as Map : null;
-    final location = customer?['location'] is Map ? customer!['location'] as Map : null;
+    // Deliver to this order's own pin; customer.location is only the fallback
+    // for documents written before Odoo sent deliveryLocation.
+    final location = json['deliveryLocation'] is Map
+        ? json['deliveryLocation'] as Map
+        : (customer?['location'] is Map ? customer!['location'] as Map : null);
     final branch = json['branch'] is Map ? json['branch'] as Map : null;
     final trail = json['stateTrail'] is Map ? Map<String, dynamic>.from(json['stateTrail']) : null;
     final paymentMode = (json['paymentMode'] ?? 'cod').toString();
