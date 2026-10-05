@@ -144,7 +144,10 @@ class _Header extends StatelessWidget {
                   ],
                 ),
               ),
-              _LiveDot(active: orders.hasLoadedOnce && orders.error == null),
+              _LiveDot(
+                active: orders.hasLoadedOnce && orders.error == null,
+                reconnecting: context.select<AuthProvider, bool>((a) => a.isReconnecting),
+              ),
             ],
           ),
           const SizedBox(height: 18),
@@ -188,12 +191,15 @@ class _Header extends StatelessWidget {
 }
 
 class _LiveDot extends StatelessWidget {
-  const _LiveDot({required this.active});
+  const _LiveDot({required this.active, this.reconnecting = false});
   final bool active;
+  // Orders still flow from Firebase, but Odoo (accept/deliver) is re-connecting.
+  final bool reconnecting;
 
   @override
   Widget build(BuildContext context) {
-    final color = active ? const Color(0xFF34D399) : AppColors.warning;
+    final ok = active && !reconnecting;
+    final color = ok ? const Color(0xFF34D399) : AppColors.warning;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -206,7 +212,7 @@ class _LiveDot extends StatelessWidget {
         children: [
           Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
           const SizedBox(width: 6),
-          Text(active ? 'Live' : 'Connecting',
+          Text(ok ? 'Live' : (reconnecting ? 'Reconnecting' : 'Connecting'),
               style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
         ],
       ),

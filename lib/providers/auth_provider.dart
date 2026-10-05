@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -180,6 +181,14 @@ class AuthProvider extends ChangeNotifier {
   List<AttendanceModel> _attendanceHistory = [];
   bool _isBatteryOptimizationIgnored = false;
 
+  // Signed in from the saved profile while the Odoo login is still being
+  // retried in the background (weak signal, server busy).
+  bool _isReconnecting = false;
+  Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
+  static const _reconnectDelays = [5, 15, 30, 60];
+  static const _cachedRiderKey = 'cached_rider_v1';
+
   // Getters
   Rider? get rider => _rider;
   Rider? get currentRider => _rider;
@@ -192,6 +201,20 @@ class AuthProvider extends ChangeNotifier {
   String? get sessionId => _session?.sessionId;
   List<AttendanceModel> get attendanceHistory => _attendanceHistory;
   bool get isBatteryOptimizationIgnored => _isBatteryOptimizationIgnored;
+  bool get isReconnecting => _isReconnecting;
+
+  static String messageFor(AuthOutcome outcome) {
+    switch (outcome) {
+      case AuthOutcome.wrongCredentials:
+        return 'Wrong login or password. Please check and try again.';
+      case AuthOutcome.tooManyAttempts:
+        return 'Too many login attempts. Please wait 1 minute and try again.';
+      case AuthOutcome.offline:
+        return 'Cannot reach the server. Check your internet signal and try again.';
+      case AuthOutcome.success:
+        return '';
+    }
+  }
 
   // Set OrderProvider reference
   void setOrderProvider(OrderProvider orderProvider) {
@@ -201,13 +224,33 @@ class AuthProvider extends ChangeNotifier {
   // Initialize auth state
   Future<void> initializeAuth() async {
     _setLoading(true);
+    ApiService.onSessionExpired = _renewSession;
     try {
       final creds = await _loadSavedCredentials();
-      if (creds != null && await ApiService.authenticate(creds.login, creds.password)) {
-        await _completeLogin(creds.login, creds.password);
-        if (kDebugMode) print('Auto-login successful: ${_rider!.name}');
+      if (creds != null) {
+        final cached = await _loadCachedRider();
+        if (cached != null && cached.email == creds.login) {
+          // Open the app straight away with the saved profile: orders come from
+          // Firebase and work without the Odoo session. Odoo login runs in the
+          // background, so a weak signal on the road never logs the rider out.
+          _rider = cached;
+          _isAuthenticated = true;
+          _orderProvider?.setCurrentUserId(cached.id);
+          _startReconnect(creds, immediately: true);
+        } else {
+          final outcome = await ApiService.login(creds.login, creds.password);
+          if (outcome == AuthOutcome.success) {
+            await _completeLogin(creds.login, creds.password);
+          } else {
+            // Only a wrong password forgets the saved login.
+            if (outcome == AuthOutcome.wrongCredentials) await CredentialStore.clear();
+            _error = messageFor(outcome);
+            _isAuthenticated = false;
+            _rider = null;
+            _session = null;
+          }
+        }
       } else {
-        if (creds != null) await CredentialStore.clear();
         _isAuthenticated = false;
         _rider = null;
         _session = null;
@@ -234,6 +277,107 @@ class AuthProvider extends ChangeNotifier {
       // Battery-optimisation prompt must not delay the first screen.
       unawaited(_ensureBatteryOptimizationIgnored());
     }
+  }
+
+  /// Background Odoo login with back-off (5s, 15s, 30s, then every minute).
+  void _startReconnect(({String login, String password}) creds, {bool immediately = false}) {
+    _reconnectTimer?.cancel();
+    _isReconnecting = true;
+    notifyListeners();
+    final delay = immediately
+        ? Duration.zero
+        : Duration(seconds: _reconnectDelays[_reconnectAttempt.clamp(0, _reconnectDelays.length - 1)]);
+    _reconnectTimer = Timer(delay, () async {
+      _reconnectAttempt++;
+      final outcome = await ApiService.login(creds.login, creds.password);
+      if (!_isAuthenticated) return; // logged out meanwhile
+      switch (outcome) {
+        case AuthOutcome.success:
+          _reconnectAttempt = 0;
+          _isReconnecting = false;
+          await _completeLogin(creds.login, creds.password);
+          break;
+        case AuthOutcome.wrongCredentials:
+          await _forceLogout(messageFor(outcome));
+          break;
+        case AuthOutcome.tooManyAttempts:
+        case AuthOutcome.offline:
+          _startReconnect(creds);
+          break;
+      }
+    });
+  }
+
+  /// Called by ApiService when an action needs Odoo and the session is gone.
+  Future<bool> _renewSession() async {
+    final creds = await CredentialStore.read();
+    if (creds == null) return false;
+    final outcome = await ApiService.login(creds.login, creds.password);
+    if (outcome == AuthOutcome.success) {
+      _reconnectTimer?.cancel();
+      _reconnectAttempt = 0;
+      if (_isReconnecting) {
+        _isReconnecting = false;
+        unawaited(_completeLogin(creds.login, creds.password));
+      }
+      return true;
+    }
+    if (outcome == AuthOutcome.wrongCredentials) {
+      await _forceLogout(messageFor(outcome));
+    } else if (_isAuthenticated && !_isReconnecting) {
+      _startReconnect(creds);
+    }
+    return false;
+  }
+
+  /// The saved password no longer works (changed by the office): sign out so
+  /// the rider can log in with the new one. MainNavigation shows the login screen.
+  Future<void> _forceLogout(String message) async {
+    _reconnectTimer?.cancel();
+    _isReconnecting = false;
+    await CredentialStore.clear();
+    await _clearCachedRider();
+    _orderProvider?.reset();
+    _rider = null;
+    _session = null;
+    _isAuthenticated = false;
+    _error = message;
+    notifyListeners();
+  }
+
+  Future<void> _cacheRider() async {
+    final r = _rider;
+    if (r == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_cachedRiderKey, jsonEncode({
+        'id': r.id,
+        'name': r.name,
+        'email': r.email,
+        'phone': r.phone,
+        'vehicleNumber': r.vehicleNumber,
+        'vehicleType': r.vehicleType,
+      }));
+    } catch (_) {}
+  }
+
+  Future<Rider?> _loadCachedRider() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_cachedRiderKey);
+      if (raw == null) return null;
+      final r = Rider.fromJson(Map<String, dynamic>.from(jsonDecode(raw) as Map));
+      return r.id.isEmpty ? null : r;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _clearCachedRider() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_cachedRiderKey);
+    } catch (_) {}
   }
 
   /// Saved login from the encrypted store. Builds before this release kept the
@@ -275,6 +419,7 @@ class AuthProvider extends ChangeNotifier {
 
     // Profile + branch access are needed before orders load; fetch together.
     await Future.wait([fetchRiderStatistics(), _fetchAndSaveUserInfo()]);
+    await _cacheRider();
 
     // Bookkeeping that the rider does not need to wait for.
     unawaited(FirebaseService.saveRiderData(
@@ -347,13 +492,16 @@ class AuthProvider extends ChangeNotifier {
       }
 
       // Authenticate with Odoo API
-      final authSuccess = await ApiService.authenticate(email, password);
-      if (authSuccess) {
+      ApiService.onSessionExpired = _renewSession;
+      final outcome = await ApiService.login(email, password);
+      if (outcome == AuthOutcome.success) {
+        _reconnectTimer?.cancel();
+        _isReconnecting = false;
         await _completeLogin(email, password);
         ErrorLogger.auth('Login successful: ${_rider!.name} (${_rider!.email})');
         return true;
       } else {
-        _error = 'Invalid email or password. Please check your credentials.';
+        _error = messageFor(outcome);
         return false;
       }
     } catch (e, stackTrace) {
@@ -429,10 +577,13 @@ class AuthProvider extends ChangeNotifier {
     _setLoading(true);
 
     try {
+      _reconnectTimer?.cancel();
+      _isReconnecting = false;
       // Stop pushes first: it needs the still-valid Odoo session.
       await PushService.unregister(_rider?.id);
       await ApiService.logout();
       await CredentialStore.clear();
+      await _clearCachedRider();
       _orderProvider?.reset();
 
       if (_rider != null) {
@@ -636,12 +787,16 @@ class AuthProvider extends ChangeNotifier {
         // Try to get saved credentials and re-authenticate
         final savedCredentials = await CredentialStore.read();
         if (savedCredentials != null) {
-          final authSuccess = await ApiService.authenticate(
+          final outcome = await ApiService.login(
             savedCredentials.login,
             savedCredentials.password,
           );
+          if (outcome == AuthOutcome.tooManyAttempts || outcome == AuthOutcome.offline) {
+            _startReconnect(savedCredentials);
+            return false; // temporary: keep the rider signed in
+          }
 
-          if (authSuccess) {
+          if (outcome == AuthOutcome.success) {
             // Update session data
             _session = AuthSession(
               sessionId: ApiService.sessionId ?? _session!.sessionId,
