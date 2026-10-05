@@ -232,4 +232,19 @@ void main() {
       expect(p.atOrderLimit, isFalse);
     });
   });
+
+  group('Delivery point', () {
+    test("uses the order's own location, not the customer's saved one", () {
+      final j = doc(id: 60, placedLocal: today)
+        ..['deliveryLocation'] = {'latitude': 31.4900, 'longitude': 74.4400};
+      final o = Order.fromJson(j);
+      expect(o.deliveryLatitude, 31.4900);
+      expect(o.deliveryLongitude, 74.4400);
+    });
+    test('falls back to the customer location for older documents', () {
+      final o = Order.fromJson(doc(id: 61, placedLocal: today));
+      expect(o.deliveryLatitude, 31.5);
+      expect(o.deliveryLongitude, 74.3);
+    });
+  });
 }
