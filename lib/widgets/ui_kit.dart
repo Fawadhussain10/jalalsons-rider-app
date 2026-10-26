@@ -303,3 +303,42 @@ class InfoRow extends StatelessWidget {
     );
   }
 }
+
+/// The order's "Address / Notes" from Odoo (floor, gate, landmark), highlighted so the
+/// rider notices it next to the address.
+class AddressNotesTag extends StatelessWidget {
+  const AddressNotesTag(this.notes, {super.key, this.maxLines = 3});
+
+  final String notes;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: AppColors.warningSoft,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(Icons.sticky_note_2_rounded, size: 16, color: Color(0xFFB45309)),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              notes,
+              maxLines: maxLines,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w600, color: Color(0xFF92400E)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

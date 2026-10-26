@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/order_provider.dart';
 import 'package:intl/intl.dart';
+import '../widgets/ui_kit.dart';
 
 class ProofOfDeliveryScreen extends StatefulWidget {
   final Order order;
@@ -288,6 +289,10 @@ class _ProofOfDeliveryScreenState extends State<ProofOfDeliveryScreen> {
                 ),
               ],
             ),
+            if (widget.order.addressNotes.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              AddressNotesTag(widget.order.addressNotes, maxLines: 4),
+            ],
             if (widget.order.items.isNotEmpty) ...[
               const SizedBox(height: 12),
               Row(

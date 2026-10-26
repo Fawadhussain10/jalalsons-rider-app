@@ -494,6 +494,10 @@ class OrderCard extends StatelessWidget {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.35)),
+                      if (order.addressNotes.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        AddressNotesTag(order.addressNotes, maxLines: 2),
+                      ],
                     ],
                   ),
                 ),
@@ -845,7 +849,7 @@ class _OrderDetailsSheetState extends State<OrderDetailsSheet> {
                 InfoRow(
                   icon: Icons.location_on_rounded,
                   label: 'Delivery address',
-                  value: o.deliveryAddress,
+                  value: o.deliveryAddress.isEmpty ? 'Address not provided' : o.deliveryAddress,
                   trailing: hasLocation
                       ? IconButton.filledTonal(
                           onPressed: () => openInGoogleMaps(context, o.deliveryLatitude, o.deliveryLongitude),
@@ -854,6 +858,11 @@ class _OrderDetailsSheetState extends State<OrderDetailsSheet> {
                         )
                       : null,
                 ),
+                if (o.addressNotes.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: AddressNotesTag(o.addressNotes, maxLines: 6),
+                  ),
               ],
             ),
           ),

@@ -40,6 +40,9 @@ class Order {
   final DateTime createdAt;
   final DateTime? estimatedDeliveryTime;
   final String? notes;
+
+  /// "Address / Notes" typed on the order in Odoo (floor, gate, landmark…).
+  final String addressNotes;
   final String? riderId;
   final DateTime? acceptedAt;
   final DateTime? pickedUpAt;
@@ -78,6 +81,7 @@ class Order {
     required this.createdAt,
     this.estimatedDeliveryTime,
     this.notes,
+    this.addressNotes = '',
     this.riderId,
     this.acceptedAt,
     this.pickedUpAt,
@@ -133,7 +137,13 @@ class Order {
     final paymentMode = (json['paymentMode'] ?? 'cod').toString();
     final state = (json['status'] ?? '').toString();
 
-    final deliveryAddress = [address?['street'], address?['street2'], address?['city']]
+    // Newer Odoo sends the order's Address / Notes separately (addressNotes) and the
+    // customer's own street as line1; older documents had the notes inside street.
+    final rawNotes = json['addressNotes'];
+    final addressNotes = (rawNotes is String) ? rawNotes.trim() : '';
+    final hasSeparateNotes = json.containsKey('addressNotes');
+    final street = hasSeparateNotes ? (address?['line1']) : (address?['street']);
+    final deliveryAddress = [street, address?['street2'], address?['city']]
         .where((p) => p != null && p.toString().trim().isNotEmpty && p != false)
         .join(', ');
 
@@ -172,6 +182,7 @@ class Order {
       createdAt: TimeUtils.parseServerTime(json['createdAt']) ?? DateTime.now(),
       estimatedDeliveryTime: TimeUtils.parseServerTime(json['estimatedDeliveryTime']),
       notes: json['notes']?.toString(),
+      addressNotes: addressNotes,
       riderId: (json['rider'] is Map ? json['rider']['riderID'] : null)?.toString(),
       acceptedAt: acceptedAt,
       pickedUpAt: pickedUpAt,
@@ -296,6 +307,16 @@ class OrderProvider extends ChangeNotifier {
   // []    = field present but empty  → block ALL orders.
   // [..] = filter to these branch IDs.
   List<int>? _allowedBranchIds;
+
+  /// Latest copy of an order from the live listener (null once it left the rider's lists).
+  Order? findOrder(String id) {
+    for (final list in [_acceptedOrders, _availableOrders, _completedOrders]) {
+      for (final o in list) {
+        if (o.id == id) return o;
+      }
+    }
+    return null;
+  }
 
   List<Order> get availableOrders => _filter(_availableOrders);
   List<Order> get acceptedOrders => _filter(_acceptedOrders);

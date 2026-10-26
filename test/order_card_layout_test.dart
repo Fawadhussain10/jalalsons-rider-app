@@ -18,11 +18,12 @@ Order _order({required bool dispatched, bool cod = true, double kms = 20.0}) {
     'amount': 124448,
     'delivery_kms': kms,
     'createdAt': now,
+    'addressNotes': 'First floor of the building, blue gate next to the mosque, ring the bell twice',
     'branch': {'id': 1, 'name': 'Jalal Sons - DHA Phase - 5'},
     'customer': {
       'name': 'afaf Tayyab with a rather long customer name',
       'phone': '+923001234567',
-      'address': {'street': 'Branch: Jalal Sons - DHA Phase - 5', 'street2': '', 'city': ''},
+      'address': {'street': 'Branch: Jalal Sons - DHA Phase - 5', 'line1': 'House 12, Street 4, Phase 5', 'street2': '', 'city': 'Lahore'},
       'location': {'latitude': 31.5, 'longitude': 74.3},
     },
     'stateTrail': {

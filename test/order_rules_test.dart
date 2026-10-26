@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jsrider/providers/order_provider.dart';
 import 'package:jsrider/utils/time_utils.dart';
+import 'package:jsrider/utils/delivery_rules.dart';
 
 /// Firestore document in the shape Odoo writes (naive UTC timestamps).
 Map<String, dynamic> doc({
@@ -314,6 +315,53 @@ void main() {
           doc(id: 80, placedLocal: today, acceptedBy: me, acceptedLocal: today, status: 'accepted'),
         ], riderId: '$me', now: now);
       expect(p.atOrderLimit, isTrue);
+    });
+  });
+
+  group('Delivered button (order location)', () {
+    bool can(double? d, {double? acc, bool has = true}) =>
+        DeliveryRules.canDeliver(orderHasLocation: has, distanceMeters: d, gpsAccuracyMeters: acc);
+
+    test('unlocked within 400 m of the order location', () {
+      expect(can(0), isTrue);
+      expect(can(399), isTrue);
+      expect(can(400), isTrue);
+      expect(can(401), isFalse);
+    });
+    test('weak GPS fix gets up to 50 m benefit, no more', () {
+      expect(can(430, acc: 35), isTrue);
+      expect(can(449, acc: 300), isTrue);
+      expect(can(451, acc: 300), isFalse);
+    });
+    test('no GPS fix yet: locked', () => expect(can(null), isFalse));
+    test('order without a location is not locked', () => expect(can(null, has: false), isTrue));
+    test("distance is measured to the order's own pin, not the customer's", () {
+      final o = Order.fromJson(doc(id: 90, placedLocal: today)
+        ..['deliveryLocation'] = {'latitude': 31.4900, 'longitude': 74.4400});
+      expect([o.deliveryLatitude, o.deliveryLongitude], [31.49, 74.44]); // customer.location is 31.5/74.3
+    });
+  });
+
+  group('Address / Notes from Odoo', () {
+    test('shown separately; address uses the customer street, not the notes', () {
+      final j = doc(id: 95, placedLocal: today);
+      j['addressNotes'] = '  First floor of the building ';
+      (j['customer']['address'] as Map)
+        ..['street'] = 'First floor of the building\nBranch: Model Town'
+        ..['line1'] = 'House 1, Block C';
+      final o = Order.fromJson(j);
+      expect(o.addressNotes, 'First floor of the building');
+      expect(o.deliveryAddress, 'House 1, Block C, Lahore');
+    });
+    test('order without notes', () {
+      final j = doc(id: 96, placedLocal: today)..['addressNotes'] = '';
+      (j['customer']['address'] as Map)['line1'] = 'House 1, Block C';
+      expect(Order.fromJson(j).addressNotes, isEmpty);
+    });
+    test('documents from older Odoo keep the old address text', () {
+      final o = Order.fromJson(doc(id: 97, placedLocal: today));
+      expect(o.addressNotes, isEmpty);
+      expect(o.deliveryAddress, 'House 1, Block C, Lahore');
     });
   });
 }

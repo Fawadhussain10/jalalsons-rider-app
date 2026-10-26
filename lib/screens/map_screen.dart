@@ -14,6 +14,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config/app_config.dart';
 import '../providers/order_provider.dart';
+import '../utils/delivery_rules.dart';
 import '../providers/auth_provider.dart';
 import '../services/firebase_service.dart';
 import 'proof_of_delivery_screen.dart';
@@ -118,11 +119,42 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   DateTime? _lastLocationShareAt;
   geo.Position? _lastSharedPosition;
 
-  bool get _canDeliver => _distanceMeters != null && _distanceMeters! <= 400.0;
-  bool get _hasValidDeliveryLocation => widget.order.deliveryLatitude != 0.0 && widget.order.deliveryLongitude != 0.0;
+  /// Delivery point = the order's own location. Kept live: if the office corrects the
+  /// order's pin in Odoo while the rider is on the way, the check follows the new point.
+  late double _destLat = (widget.order.deliveryLatitude as num).toDouble();
+  late double _destLng = (widget.order.deliveryLongitude as num).toDouble();
+  OrderProvider? _orders;
 
-  Point get _customerPosition =>
-      Point(coordinates: Position(widget.order.deliveryLongitude, widget.order.deliveryLatitude));
+  /// Unlocked within 400 m of the order's location, allowing for the phone's reported GPS
+  /// error (up to 50 m) — see [DeliveryRules].
+  bool get _canDeliver => DeliveryRules.canDeliver(
+        orderHasLocation: _hasValidDeliveryLocation,
+        distanceMeters: _distanceMeters,
+        gpsAccuracyMeters: _currentPosition?.accuracy,
+      );
+
+  bool get _hasValidDeliveryLocation => _destLat != 0.0 && _destLng != 0.0;
+
+  Point get _customerPosition => Point(coordinates: Position(_destLng, _destLat));
+
+  double _distanceTo(geo.Position pos) =>
+      geo.Geolocator.distanceBetween(pos.latitude, pos.longitude, _destLat, _destLng);
+
+  void _onOrdersChanged() {
+    final latest = _orders?.findOrder(widget.order.id.toString());
+    if (!mounted || latest == null) return;
+    if (latest.deliveryLatitude == _destLat && latest.deliveryLongitude == _destLng) return;
+    setState(() {
+      _destLat = latest.deliveryLatitude;
+      _destLng = latest.deliveryLongitude;
+      _prefetchedRouteData = null;
+      if (_currentPosition != null) _distanceMeters = _distanceTo(_currentPosition!);
+    });
+    unawaited(_addCustomerMarker());
+    if (_isNavigating && _currentPosition != null) {
+      unawaited(_fetchAndShowRouteForPosition(_currentPosition!));
+    }
+  }
 
   double _smoothHeading(double headingDeg) {
     _headingBuffer.add(headingDeg);
@@ -166,6 +198,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _orders = context.read<OrderProvider>()..addListener(_onOrdersChanged);
     _initializeAnimations();
     _startLocationStream();
   }
@@ -193,6 +226,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   @override
   void dispose() {
     _positionStreamSub?.cancel();
+    _orders?.removeListener(_onOrdersChanged);
     _pulseController.dispose();
     _slideController.dispose();
     _fadeController.dispose();
@@ -230,6 +264,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     // Get initial position but don't immediately move camera
     try {
       final pos = await geo.Geolocator.getCurrentPosition();
+      if (mounted && _currentPosition == null) {
+        setState(() {
+          _currentPosition = pos;
+          _distanceMeters = _distanceTo(pos);
+        });
+      }
 
       // Set a flag to prevent immediate camera movement
       // Let the location stream handle the first camera update
@@ -424,6 +464,15 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         if (pos.latitude == 0.0 && pos.longitude == 0.0) return;
         final now = DateTime.now();
 
+        // Distance first: the Delivered button must not wait for the camera animation.
+        if (mounted) {
+          setState(() {
+            _distanceMeters = _distanceTo(pos);
+            _currentPosition = pos;
+            _advanceStep(pos);
+          });
+        }
+
         // For the first position update, wait a bit before moving camera
         // This gives the customer marker animation time to complete
         final isFirstUpdate = _lastCameraUpdateAt == null;
@@ -453,20 +502,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           unawaited(_fetchAndShowRouteForPosition(pos, isPrefetch: true));
         }
 
-        final d = geo.Geolocator.distanceBetween(
-          pos.latitude,
-          pos.longitude,
-          widget.order.deliveryLatitude,
-          widget.order.deliveryLongitude,
-        );
-
-        if (mounted) {
-          setState(() {
-            _distanceMeters = d;
-            _currentPosition = pos;
-            _advanceStep(pos);
-          });
-        }
 
         // Update live location sharing aggressively (time or distance or heading change)
         if (_isLocationSharing) {
@@ -682,7 +717,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   Future<void> _fetchAndShowRouteForPosition(geo.Position startPos, {bool isPrefetch = false}) async {
     final start = '${startPos.longitude},${startPos.latitude}';
-    final end = '${widget.order.deliveryLongitude},${widget.order.deliveryLatitude}';
+    final end = '$_destLng,$_destLat';
 
     final url = Uri.parse(
         'https://api.mapbox.com/directions/v5/mapbox/driving/$start;$end?geometries=geojson&overview=full&alternatives=false&steps=true&access_token=${AppConfig.mapboxAccessToken}');
@@ -1006,7 +1041,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Move closer to the delivery location (≤400m). Current: ${_distanceMeters?.toStringAsFixed(0) ?? '-'} m'), 
+            content: Text('Move closer to the order location (≤400m). Current: ${_distanceMeters?.toStringAsFixed(0) ?? '-'} m'),
             backgroundColor: Colors.orange[600], 
             behavior: SnackBarBehavior.floating,
           ),
@@ -1056,8 +1091,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       }
       return;
     }
-    final lat = widget.order.deliveryLatitude;
-    final lng = widget.order.deliveryLongitude;
+    final lat = _destLat;
+    final lng = _destLng;
     
     // Using universal link that works on both Android and iOS
     final url = 'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng';
@@ -1284,6 +1319,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
                 ),
+                if ((_typedOrder?.addressNotes ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  AddressNotesTag(_typedOrder!.addressNotes, maxLines: 2),
+                ],
               ],
             ),
           ),
