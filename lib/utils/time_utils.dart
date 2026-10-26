@@ -42,6 +42,19 @@ class TimeUtils {
     return '${u.year}-${two(u.month)}-${two(u.day)}T${two(u.hour)}:${two(u.minute)}:${two(u.second)}';
   }
 
+  /// Previous-day orders nobody accepted stay on offer until 2:00 AM, then hide.
+  static const int carryOverAvailableUntilHour = 2;
+
+  static DateTime availableCarryOverEnd([DateTime? now]) =>
+      startOfToday(now).add(const Duration(hours: carryOverAvailableUntilHour));
+
+  /// Time left until today's 2:00 AM cut-off, or null once it has passed.
+  static Duration? untilAvailableCarryOverEnd([DateTime? now]) {
+    final n = now ?? DateTime.now();
+    final end = availableCarryOverEnd(n);
+    return end.isAfter(n) ? end.difference(n) : null;
+  }
+
   static Duration untilNextMidnight([DateTime? now]) {
     final n = now ?? DateTime.now();
     return startOfToday(n).add(const Duration(days: 1)).difference(n);

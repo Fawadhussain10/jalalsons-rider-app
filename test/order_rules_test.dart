@@ -364,4 +364,51 @@ void main() {
       expect(o.deliveryAddress, 'House 1, Block C, Lahore');
     });
   });
+
+  group('2:00 AM cut-off for yesterday\'s orders nobody accepted', () {
+    final at0159 = DateTime(2026, 9, 25, 1, 59);
+    final at0200 = DateTime(2026, 9, 25, 2, 0);
+    final at1800 = DateTime(2026, 9, 25, 18, 0);
+    List<Map<String, dynamic>> docs() => [
+          doc(id: 101, placedLocal: yesterday2350), // yesterday, nobody accepted
+          doc(id: 102, placedLocal: DateTime(2026, 9, 24, 15)), // yesterday afternoon, nobody accepted
+          doc(id: 103, placedLocal: today.add(const Duration(minutes: 30))), // today 12:30 AM
+          doc(id: 104, placedLocal: yesterday2350, acceptedBy: me, acceptedLocal: yesterday2350,
+              status: 'accepted'), // yesterday, mine, ongoing
+          doc(id: 105, placedLocal: yesterday2350, attachedRider: me,
+              dispatchedLocal: today.add(const Duration(minutes: 5)), status: 'dispatch'), // office gave it to me
+        ];
+
+    test('1:59 AM: yesterday\'s not-accepted orders still offered', () {
+      final b = OrderProvider.bucketOrders(docs(), riderId: me, now: at0159);
+      expect(b.available.map((o) => o.id).toSet(), {'101', '102', '103'});
+    });
+
+    test('2:00 AM: they hide, today\'s order stays', () {
+      final b = OrderProvider.bucketOrders(docs(), riderId: me, now: at0200);
+      expect(b.available.map((o) => o.id), ['103']);
+    });
+
+    test('yesterday\'s ongoing orders stay until delivered, all day', () {
+      final b = OrderProvider.bucketOrders(docs(), riderId: me, now: at1800);
+      expect(b.accepted.map((o) => o.id).toSet(), {'104', '105'});
+      expect(b.available.map((o) => o.id), ['103']);
+    });
+
+    test('delivered today: leaves Ongoing, not in Completed, counted in today\'s cash', () {
+      final b = OrderProvider.bucketOrders([
+        doc(id: 106, placedLocal: yesterday2350, acceptedBy: me, acceptedLocal: yesterday2350,
+            deliveredBy: me, deliveredLocal: DateTime(2026, 9, 25, 10), status: 'delivered', amount: 1200),
+      ], riderId: me, now: at1800);
+      expect(b.accepted, isEmpty);
+      expect(b.completed, isEmpty);
+      expect(b.deliveredToday.map((o) => o.id), ['106']);
+    });
+
+    test('timer: time left to the cut-off', () {
+      expect(TimeUtils.untilAvailableCarryOverEnd(DateTime(2026, 9, 25, 1, 0)), const Duration(hours: 1));
+      expect(TimeUtils.untilAvailableCarryOverEnd(at0200), isNull);
+      expect(TimeUtils.untilAvailableCarryOverEnd(DateTime(2026, 9, 24, 23, 0)), isNull); // next one comes after midnight resubscribe
+    });
+  });
 }
