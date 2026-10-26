@@ -210,6 +210,20 @@ class Order {
   bool get isDispatched => pickedUpAt != null;
   bool get isDelivered => status == OrderStatus.delivered;
 
+  /// Rider attached to the order in Odoo (null when none).
+  int? get assignedRiderId => int.tryParse(riderId ?? '');
+
+  /// Whether this order is [me]'s: the rider attached in Odoo decides, so steps the office
+  /// does in Odoo (accept, deliver) keep it with that rider. Older documents without a
+  /// rider fall back to who accepted / delivered it.
+  bool belongsTo(int? me) {
+    if (me == null) return false;
+    final assigned = assignedRiderId;
+    if (assigned != null) return assigned == me;
+    if (isDelivered) return deliveredBy == me || (deliveredBy == null && acceptedBy == me);
+    return acceptedBy == me;
+  }
+
   String get paymentLabel {
     switch (paymentMode) {
       case 'cod':
@@ -441,17 +455,22 @@ class OrderProvider extends ChangeNotifier {
       final placedToday = !order.createdAt.isBefore(todayStart);
 
       if (order.isDelivered) {
-        if (order.deliveredBy == riderId || (order.deliveredBy == null && order.acceptedBy == riderId)) {
+        if (order.belongsTo(riderId)) {
           // Previous-day orders disappear once delivered.
           if (placedToday) completed.add(order);
           if (order.deliveredAt != null && !order.deliveredAt!.isBefore(todayStart)) {
             deliveredToday.add(order);
           }
         }
-      } else if (order.acceptedAt != null) {
-        if (order.acceptedBy == riderId) accepted.add(order);
-      } else if (order.stateTrail?['draft'] is Map) {
-        available.add(order);
+      } else if (order.acceptedAt == null && order.assignedRiderId == null) {
+        if (order.stateTrail?['draft'] is Map) available.add(order);
+      } else if (order.belongsTo(riderId)) {
+        // Attached to this rider by the office before anyone accepted: still needs Accept.
+        if (order.status == OrderStatus.pending) {
+          available.add(order);
+        } else {
+          accepted.add(order);
+        }
       }
     }
 
