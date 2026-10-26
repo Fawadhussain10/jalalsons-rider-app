@@ -17,6 +17,9 @@ Map<String, dynamic> doc({
   bool live = true,
   String orderType = 'delivery',
   String status = 'draft',
+  int? attachedRider,
+  int? acceptedByUser,
+  int? deliveredByUser,
 }) {
   String utc(DateTime d) => TimeUtils.toServerQueryString(d);
   return {
@@ -30,6 +33,7 @@ Map<String, dynamic> doc({
     'delivery_kms': 3.5,
     'createdAt': utc(placedLocal),
     'branch': {'id': branch, 'name': 'Model Town'},
+    if (attachedRider != null) 'rider': {'riderID': attachedRider, 'riderName': 'Rider $attachedRider'},
     'customer': {
       'name': 'Ali Khan $id',
       'phone': '+923001234567',
@@ -41,9 +45,9 @@ Map<String, dynamic> doc({
     ],
     'stateTrail': {
       'draft': {'at': utc(placedLocal), 'by': 2},
-      'accepted': {'at': acceptedLocal == null ? null : utc(acceptedLocal), 'by': acceptedBy},
+      'accepted': {'at': acceptedLocal == null ? null : utc(acceptedLocal), 'by': acceptedByUser ?? acceptedBy},
       'dispatched': {'at': dispatchedLocal == null ? null : utc(dispatchedLocal), 'by': null},
-      'delivered': {'at': deliveredLocal == null ? null : utc(deliveredLocal), 'by': deliveredBy},
+      'delivered': {'at': deliveredLocal == null ? null : utc(deliveredLocal), 'by': deliveredByUser ?? deliveredBy},
     },
   };
 }
@@ -245,6 +249,71 @@ void main() {
       final o = Order.fromJson(doc(id: 61, placedLocal: today));
       expect(o.deliveryLatitude, 31.5);
       expect(o.deliveryLongitude, 74.3);
+    });
+  });
+
+  group('Steps done by the office in Odoo', () {
+    const office = 2;
+    final t = today.add(const Duration(minutes: 10));
+
+    test('rider accepted, office marked delivered: stays in Completed and cash', () {
+      final b = OrderProvider.bucketOrders([
+        doc(id: 70, placedLocal: today, attachedRider: me, acceptedBy: me, acceptedLocal: today,
+            dispatchedLocal: t, deliveredByUser: office, deliveredLocal: t, status: 'delivered', amount: 800),
+      ], riderId: me, now: now);
+      expect(b.completed.map((o) => o.id), ['70']);
+      expect(b.deliveredToday.map((o) => o.id), ['70']);
+    });
+
+    test('office accepted and delivered for the attached rider: still his', () {
+      final b = OrderProvider.bucketOrders([
+        doc(id: 71, placedLocal: today, attachedRider: me, acceptedByUser: office, acceptedLocal: today,
+            deliveredByUser: office, deliveredLocal: t, status: 'delivered'),
+      ], riderId: me, now: now);
+      expect(b.completed.map((o) => o.id), ['71']);
+    });
+
+    test('office dispatched to a rider without Accept: in his Ongoing, not Available to others', () {
+      final docs = [doc(id: 72, placedLocal: today, attachedRider: me, dispatchedLocal: t, status: 'dispatch')];
+      final mine = OrderProvider.bucketOrders(docs, riderId: me, now: now);
+      expect(mine.accepted.map((o) => o.id), ['72']);
+      expect(mine.available, isEmpty);
+      final other = OrderProvider.bucketOrders(docs, riderId: 99, now: now);
+      expect(other.available, isEmpty);
+      expect(other.accepted, isEmpty);
+    });
+
+    test('order moved to another rider in Odoo leaves this rider', () {
+      final b = OrderProvider.bucketOrders([
+        doc(id: 73, placedLocal: today, attachedRider: 99, acceptedBy: me, acceptedLocal: today, status: 'accepted'),
+        doc(id: 74, placedLocal: today, attachedRider: 99, acceptedBy: me, acceptedLocal: today,
+            deliveredByUser: office, deliveredLocal: t, status: 'delivered'),
+      ], riderId: me, now: now);
+      expect(b.accepted, isEmpty);
+      expect(b.completed, isEmpty);
+    });
+
+    test('new order pre-assigned to a rider: only that rider can accept it', () {
+      final docs = [doc(id: 75, placedLocal: today, attachedRider: me)];
+      expect(OrderProvider.bucketOrders(docs, riderId: me, now: now).available.map((o) => o.id), ['75']);
+      expect(OrderProvider.bucketOrders(docs, riderId: 99, now: now).available, isEmpty);
+    });
+
+    test('belongsTo: attached rider wins, old documents use who accepted', () {
+      expect(Order.fromJson(doc(id: 76, placedLocal: today, attachedRider: me, acceptedByUser: office,
+          acceptedLocal: today, status: 'accepted')).belongsTo(me), isTrue);
+      expect(Order.fromJson(doc(id: 77, placedLocal: today, acceptedBy: me, acceptedLocal: today,
+          status: 'accepted')).belongsTo(me), isTrue);
+      expect(Order.fromJson(doc(id: 78, placedLocal: today)).belongsTo(me), isFalse);
+    });
+
+    test('office-dispatched order counts toward the 2-order limit', () {
+      final p = OrderProvider()
+        ..debugLoadSnapshot([
+          doc(id: 79, placedLocal: today, attachedRider: me, dispatchedLocal: t, status: 'dispatch'),
+          doc(id: 80, placedLocal: today, acceptedBy: me, acceptedLocal: today, status: 'accepted'),
+        ], riderId: '$me', now: now);
+      expect(p.atOrderLimit, isTrue);
     });
   });
 }

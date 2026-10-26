@@ -786,7 +786,7 @@ class _OrderDetailsSheetState extends State<OrderDetailsSheet> {
     final o = _order;
     final style = orderStatusStyle(o);
     final riderId = context.select<AuthProvider, String?>((a) => a.currentRider?.id);
-    final mine = o.acceptedBy?.toString() == riderId;
+    final mine = o.belongsTo(int.tryParse(riderId ?? ''));
     final hasLocation = o.deliveryLatitude != 0.0 && o.deliveryLongitude != 0.0;
 
     return DraggableScrollableSheet(
