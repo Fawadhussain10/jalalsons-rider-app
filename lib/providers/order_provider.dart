@@ -283,9 +283,11 @@ class Order {
 ///
 /// Visibility rule (agreed with operations):
 /// * orders placed since local midnight are shown;
-/// * orders from the previous day stay only while they are not delivered
-///   (so an order placed at 11:50 PM can still be finished after midnight);
-/// * once delivered, a previous-day order disappears.
+/// * previous-day orders nobody accepted stay on offer until 2:00 AM, then hide;
+/// * previous-day orders a rider has (accepted / attached) stay in Ongoing until
+///   delivered (so an order placed at 11:50 PM can still be finished after midnight);
+/// * once delivered, a previous-day order leaves the Completed list (it still counts
+///   in today's cash/kms and in the profile's delivered total).
 class OrderProvider extends ChangeNotifier {
   List<Order> _availableOrders = [];
   List<Order> _acceptedOrders = [];
@@ -301,6 +303,7 @@ class OrderProvider extends ChangeNotifier {
 
   StreamSubscription<List<Map<String, dynamic>>>? _ordersSub;
   Timer? _midnightTimer;
+  Timer? _carryOverTimer;
 
   // Branch IDs this rider is allowed to see orders for.
   // null  = field absent on rider doc → no restriction.
@@ -391,6 +394,7 @@ class OrderProvider extends ChangeNotifier {
   void _subscribe() {
     _ordersSub?.cancel();
     _midnightTimer?.cancel();
+    _carryOverTimer?.cancel();
 
     final since = TimeUtils.carryOverStart();
     _ordersSub = FirebaseService.streamOrdersPlacedSince(since).listen(
@@ -411,6 +415,13 @@ class OrderProvider extends ChangeNotifier {
     // At midnight yesterday's delivered orders must disappear and the query
     // window moves forward a day.
     _midnightTimer = Timer(TimeUtils.untilNextMidnight() + const Duration(seconds: 2), _subscribe);
+
+    // At 2:00 AM yesterday's orders nobody accepted leave the Available tab, even if no
+    // order changes then to trigger a refresh.
+    final untilCutoff = TimeUtils.untilAvailableCarryOverEnd();
+    if (untilCutoff != null) {
+      _carryOverTimer = Timer(untilCutoff + const Duration(seconds: 1), _rebuild);
+    }
   }
 
   void _rebuild() {
@@ -451,8 +462,11 @@ class OrderProvider extends ChangeNotifier {
     List<int>? allowedBranchIds,
     DateTime? now,
   }) {
-    final todayStart = TimeUtils.startOfToday(now);
-    final carryOverStart = TimeUtils.carryOverStart(now);
+    final current = now ?? DateTime.now();
+    final todayStart = TimeUtils.startOfToday(current);
+    final carryOverStart = TimeUtils.carryOverStart(current);
+    // Yesterday's orders nobody accepted are offered only until 2:00 AM.
+    final offerYesterday = current.isBefore(TimeUtils.availableCarryOverEnd(current));
     final available = <Order>[];
     final accepted = <Order>[];
     final completed = <Order>[];
@@ -484,7 +498,7 @@ class OrderProvider extends ChangeNotifier {
           }
         }
       } else if (order.acceptedAt == null && order.assignedRiderId == null) {
-        if (order.stateTrail?['draft'] is Map) available.add(order);
+        if ((placedToday || offerYesterday) && order.stateTrail?['draft'] is Map) available.add(order);
       } else if (order.belongsTo(riderId)) {
         // Attached to this rider by the office before anyone accepted: still needs Accept.
         if (order.status == OrderStatus.pending) {
@@ -626,6 +640,7 @@ class OrderProvider extends ChangeNotifier {
     _ordersSub?.cancel();
     _ordersSub = null;
     _midnightTimer?.cancel();
+    _carryOverTimer?.cancel();
     _availableOrders = [];
     _acceptedOrders = [];
     _completedOrders = [];
@@ -662,6 +677,7 @@ class OrderProvider extends ChangeNotifier {
   void dispose() {
     _ordersSub?.cancel();
     _midnightTimer?.cancel();
+    _carryOverTimer?.cancel();
     super.dispose();
   }
 }
